@@ -1,6 +1,9 @@
 # app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.workouts import router as workouts_router
+from app.api.nutrition import router as nutrition_router
+
 
 from app.core.config import CORS_ORIGINS
 from app.api.health import router as health_router
@@ -20,3 +23,5 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(onboarding_router)
+app.include_router(workouts_router)
+app.include_router(nutrition_router)
