@@ -5,6 +5,7 @@ from app.core.database import get_db
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+
 def _ensure_student_access(db, coach_user_id: int, student_user_id: int):
     cur = db.cursor()
     cur.execute(
@@ -18,10 +19,11 @@ def _ensure_student_access(db, coach_user_id: int, student_user_id: int):
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Student not found")
-    # row dict değilse indexli olabilir:
+
     assigned = row["assigned_coach_id"] if isinstance(row, dict) else row[1]
     if assigned != coach_user_id:
         raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
 
 @router.get("/students")
 def list_students(
@@ -54,7 +56,6 @@ def list_students(
             (user_id,),
         )
     else:
-        # superadmin hepsini görsün
         cur.execute(
             """
             SELECT
@@ -121,7 +122,13 @@ def get_student_detail(
 
     # 2) Onboarding (varsa)
     cur.execute(
-        "SELECT * FROM client_onboarding WHERE user_id = %s ORDER BY id DESC LIMIT 1",
+        """
+        SELECT *
+        FROM client_onboarding
+        WHERE user_id = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
         (student_user_id,),
     )
     onboarding = cur.fetchone()
@@ -141,25 +148,43 @@ def get_student_detail(
 
     workout_days = []
     workout_exercises = []
+
     if workout_program:
         wp_id = workout_program["id"] if isinstance(workout_program, dict) else workout_program[0]
+
+        # ✅ workout_days schema:
+        # id, workout_program_id, day_of_week, order_index
         cur.execute(
             """
-            SELECT id, day_name, order_index
+            SELECT
+              id,
+              day_of_week,
+              order_index
             FROM workout_days
-            WHERE program_id = %s
+            WHERE workout_program_id = %s
             ORDER BY order_index ASC, id ASC
             """,
             (wp_id,),
         )
         workout_days = cur.fetchall() or []
 
+        # ✅ workout_exercises schema:
+        # id, workout_day_id, exercise_name, sets, reps, notes, order_index
+        # Burada program_id yok, bu yüzden days üzerinden filtreliyoruz.
         cur.execute(
             """
-            SELECT id, day_id, name, sets, reps, notes, order_index
-            FROM workout_exercises
-            WHERE program_id = %s
-            ORDER BY day_id ASC, order_index ASC, id ASC
+            SELECT
+              we.id,
+              we.workout_day_id,
+              we.exercise_name,
+              we.sets,
+              we.reps,
+              we.notes,
+              we.order_index
+            FROM workout_exercises we
+            JOIN workout_days wd ON wd.id = we.workout_day_id
+            WHERE wd.workout_program_id = %s
+            ORDER BY we.workout_day_id ASC, we.order_index ASC, we.id ASC
             """,
             (wp_id,),
         )
@@ -181,11 +206,14 @@ def get_student_detail(
     meals = []
     if nutrition_program:
         np_id = nutrition_program["id"] if isinstance(nutrition_program, dict) else nutrition_program[0]
+
+        # ✅ nutrition_meals schema:
+        # id, nutrition_program_id, meal_type, content, order_index
         cur.execute(
             """
             SELECT id, meal_type, content, order_index
             FROM nutrition_meals
-            WHERE program_id = %s
+            WHERE nutrition_program_id = %s
             ORDER BY order_index ASC, id ASC
             """,
             (np_id,),
