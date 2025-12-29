@@ -1,13 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from psycopg2.extras import RealDictCursor
+from pydantic import BaseModel, Field
+from typing import Optional
+import json
+
 from app.core.database import get_db
 from app.core.security import require_role
-import json
-from fastapi import HTTPException
-from psycopg2.extras import RealDictCursor
-from fastapi import Query
+from app.api.coach.students import router as students_router
 
 
 router = APIRouter(prefix="/coach", tags=["coach"])
+router.include_router(students_router)
 
 
 def _fetchone_id(row):
@@ -21,6 +24,9 @@ def _fetchone_id(row):
     return row[0]
 
 
+# --------------------------------------------------
+# STUDENTS (LIST)
+# --------------------------------------------------
 @router.get("/students")
 def get_my_students(
     db=Depends(get_db),
@@ -30,37 +36,33 @@ def get_my_students(
     cur.execute(
         """
         SELECT
-    u.id AS student_id,
-    u.email,
-    COALESCE(o.full_name, u.email) AS full_name,
-    c.goal_type,
-    c.activity_level,
-    c.onboarding_done,
-    c.created_at,
+            u.id AS student_id,
+            u.email,
+            COALESCE(o.full_name, u.email) AS full_name,
+            c.goal_type,
+            c.activity_level,
+            c.onboarding_done,
+            c.created_at,
 
-    s.plan_name,
-    s.status AS subscription_status,
-    s.purchased_at,
-    s.started_at,
-    s.ends_at,
-    GREATEST(0, CEIL(EXTRACT(EPOCH FROM (s.ends_at - NOW())) / 86400))::int AS days_left
-
-FROM clients c
-JOIN users u ON u.id = c.user_id
-LEFT JOIN client_onboarding o ON o.user_id = u.id
-
-LEFT JOIN LATERAL (
-    SELECT *
-    FROM subscriptions
-    WHERE client_user_id = u.id
-      AND coach_user_id = c.assigned_coach_id
-    ORDER BY purchased_at DESC NULLS LAST, id DESC
-    LIMIT 1
-) s ON TRUE
-
-WHERE c.assigned_coach_id = %s
-ORDER BY u.id;
-
+            s.plan_name,
+            s.status AS subscription_status,
+            s.purchased_at,
+            s.started_at,
+            s.ends_at,
+            GREATEST(0, CEIL(EXTRACT(EPOCH FROM (s.ends_at - NOW())) / 86400))::int AS days_left
+        FROM clients c
+        JOIN users u ON u.id = c.user_id
+        LEFT JOIN client_onboarding o ON o.user_id = u.id
+        LEFT JOIN LATERAL (
+            SELECT *
+            FROM subscriptions
+            WHERE client_user_id = u.id
+              AND coach_user_id = c.assigned_coach_id
+            ORDER BY purchased_at DESC NULLS LAST, id DESC
+            LIMIT 1
+        ) s ON TRUE
+        WHERE c.assigned_coach_id = %s
+        ORDER BY u.id;
         """,
         (current_user["id"],),
     )
@@ -68,7 +70,7 @@ ORDER BY u.id;
 
 
 # --------------------------------------------------
-# GET ACTIVE PROGRAMS (READ)
+# ACTIVE PROGRAMS (READ)
 # --------------------------------------------------
 @router.get("/students/{student_user_id}/active-programs")
 def get_active_programs(
@@ -79,26 +81,20 @@ def get_active_programs(
     coach_id = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
 
-    # 1) Öğrenci bu koça mı ait?
+    # student ownership check
     cur.execute(
-        """
-        SELECT 1
-        FROM clients
-        WHERE user_id = %s AND assigned_coach_id = %s
-        """,
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
         raise HTTPException(status_code=403, detail="Student not assigned to this coach")
 
-    # ----------------------------
-    # 2) Aktif workout programı
-    # ----------------------------
+    # workout program
     cur.execute(
         """
         SELECT id, client_user_id, title, is_active, created_at, updated_at
         FROM workout_programs
-        WHERE client_user_id = %s AND is_active = TRUE
+        WHERE client_user_id=%s AND is_active=TRUE
         ORDER BY id DESC
         LIMIT 1
         """,
@@ -110,50 +106,38 @@ def get_active_programs(
     workout_exercises = []
 
     if workout_program:
-        program_id = workout_program["id"] if isinstance(workout_program, dict) else workout_program[0]
-
-        # workout_days
+        program_id = workout_program["id"]
         cur.execute(
             """
             SELECT id, workout_program_id, day_of_week, order_index, created_at, updated_at
             FROM workout_days
-            WHERE workout_program_id = %s
+            WHERE workout_program_id=%s
             ORDER BY order_index ASC, id ASC
             """,
             (program_id,),
         )
         workout_days = cur.fetchall()
 
-        # workout_exercises
         cur.execute(
             """
             SELECT
-                e.id,
-                e.workout_day_id,
-                e.exercise_name,
-                e.sets,
-                e.reps,
-                e.notes,
-                e.order_index,
-                e.created_at,
-                e.updated_at
+                e.id, e.workout_day_id, e.exercise_name, e.sets, e.reps, e.notes, e.order_index,
+                e.created_at, e.updated_at
             FROM workout_exercises e
             JOIN workout_days d ON d.id = e.workout_day_id
-            WHERE d.workout_program_id = %s
+            WHERE d.workout_program_id=%s
             ORDER BY d.order_index ASC, e.order_index ASC, e.id ASC
             """,
             (program_id,),
         )
         workout_exercises = cur.fetchall()
 
-    # ----------------------------
-    # 3) Aktif nutrition programı
-    # ----------------------------
+    # nutrition program
     cur.execute(
         """
         SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at
         FROM nutrition_programs
-        WHERE client_user_id = %s AND is_active = TRUE
+        WHERE client_user_id=%s AND is_active=TRUE
         ORDER BY id DESC
         LIMIT 1
         """,
@@ -163,15 +147,12 @@ def get_active_programs(
 
     meals = []
     if nutrition_program:
-        nutrition_program_id = (
-            nutrition_program["id"] if isinstance(nutrition_program, dict) else nutrition_program[0]
-        )
-
+        nutrition_program_id = nutrition_program["id"]
         cur.execute(
             """
             SELECT id, nutrition_program_id, meal_type, content, order_index, created_at, updated_at
             FROM nutrition_meals
-            WHERE nutrition_program_id = %s
+            WHERE nutrition_program_id=%s
             ORDER BY order_index ASC, id ASC
             """,
             (nutrition_program_id,),
@@ -187,7 +168,6 @@ def get_active_programs(
     }
 
 
-
 # --------------------------------------------------
 # WORKOUT PROGRAM SAVE
 # --------------------------------------------------
@@ -201,62 +181,45 @@ def save_workout_program(
     coach_id = current_user["id"]
     cur = db.cursor()
 
-    # 1) Öğrenci koça mı ait
     cur.execute(
-        """
-        SELECT 1
-        FROM clients
-        WHERE user_id = %s AND assigned_coach_id = %s
-        """,
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
         raise HTTPException(status_code=403, detail="Student not assigned to this coach")
 
-    # 2) Eski aktif programı kapat
     cur.execute(
-        """
-        UPDATE workout_programs
-        SET is_active = FALSE
-        WHERE client_user_id = %s AND is_active = TRUE
-        """,
+        "UPDATE workout_programs SET is_active=FALSE WHERE client_user_id=%s AND is_active=TRUE",
         (student_user_id,),
     )
 
-    # 3) Yeni workout program oluştur
     cur.execute(
-    """
-    INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
-    VALUES (%s, %s, %s, TRUE)
-    RETURNING id
-    """,
-    (student_user_id, coach_id, "Coach Workout Program"),
-)
-
-    program_row = cur.fetchone()
-    program_id = _fetchone_id(program_row)
+        """
+        INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
+        VALUES (%s, %s, %s, TRUE)
+        RETURNING id
+        """,
+        (student_user_id, coach_id, "Coach Workout Program"),
+    )
+    program_id = _fetchone_id(cur.fetchone())
 
     week = payload.get("week", {}) or {}
-
     day_order = 1
+
     for day_key, exercises in week.items():
         if not exercises:
             continue
 
-        # 4) workout_days → programa bağlı
         cur.execute(
             """
-            INSERT INTO workout_days
-            (workout_program_id, day_of_week, order_index)
+            INSERT INTO workout_days (workout_program_id, day_of_week, order_index)
             VALUES (%s, %s, %s)
             RETURNING id
             """,
             (program_id, day_key, day_order),
         )
-        workout_day_row = cur.fetchone()
-        workout_day_id = _fetchone_id(workout_day_row)
+        workout_day_id = _fetchone_id(cur.fetchone())
 
-        # 5) workout_exercises → SADECE workout_day_id
         for ex_order, ex in enumerate(exercises, start=1):
             cur.execute(
                 """
@@ -280,7 +243,9 @@ def save_workout_program(
     return {"ok": True, "program_id": program_id}
 
 
-
+# --------------------------------------------------
+# NUTRITION PROGRAM SAVE (MVP)
+# --------------------------------------------------
 @router.post("/students/{student_user_id}/nutrition-programs")
 def save_nutrition_program(
     student_user_id: int,
@@ -291,29 +256,18 @@ def save_nutrition_program(
     coach_id = current_user["id"]
     cur = db.cursor()
 
-    # 1) Öğrenci bu koça mı ait?
     cur.execute(
-        """
-        SELECT 1
-        FROM clients
-        WHERE user_id = %s AND assigned_coach_id = %s
-        """,
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
         raise HTTPException(status_code=403, detail="Student not assigned to this coach")
 
-    # 2) Eski aktif nutrition programı pasifle
     cur.execute(
-        """
-        UPDATE nutrition_programs
-        SET is_active = FALSE
-        WHERE client_user_id = %s AND is_active = TRUE
-        """,
+        "UPDATE nutrition_programs SET is_active=FALSE WHERE client_user_id=%s AND is_active=TRUE",
         (student_user_id,),
     )
 
-    # 3) Yeni nutrition program oluştur
     cur.execute(
         """
         INSERT INTO nutrition_programs (client_user_id, coach_user_id, title, is_active)
@@ -322,24 +276,12 @@ def save_nutrition_program(
         """,
         (student_user_id, coach_id, "Coach Nutrition Program"),
     )
-    row = cur.fetchone()
-    nutrition_program_id = row["id"] if isinstance(row, dict) else row[0]
+    nutrition_program_id = _fetchone_id(cur.fetchone())
 
-    # 4) Payload week yapısı: { week: { mon:[{type,items}], tue:... } }
     week = payload.get("week", {}) or {}
-
-    # MVP: tüm günler aynı olsun diye "mon"u baz alıyoruz.
-    # mon yoksa ilk dolu günü al.
-    day_meals = week.get("mon")
-    if not day_meals:
-        for k in ["tue", "wed", "thu", "fri", "sat", "sun"]:
-            if week.get(k):
-                day_meals = week.get(k)
-                break
+    day_meals = week.get("mon") or next((week[k] for k in ["tue", "wed", "thu", "fri", "sat", "sun"] if week.get(k)), [])
     day_meals = day_meals or []
 
-    # 5) meals yaz (order_index ile)
-    # content: items list'ini JSON string olarak saklıyoruz (UI zaten parse ediyor)
     for idx, m in enumerate(day_meals, start=1):
         meal_type = m.get("type") or "Meal"
         items = m.get("items") or []
@@ -356,6 +298,10 @@ def save_nutrition_program(
     db.commit()
     return {"ok": True, "nutrition_program_id": nutrition_program_id}
 
+
+# --------------------------------------------------
+# STUDENTS FILTERS
+# --------------------------------------------------
 @router.get("/students/new-programs")
 def get_students_with_new_programs(
     days: int = Query(7, ge=1, le=365),
@@ -387,20 +333,12 @@ def get_students_with_new_programs(
             c.activity_level,
             c.onboarding_done,
             c.created_at,
-
             lw.last_workout_at,
             ln.last_nutrition_at,
             GREATEST(
                 COALESCE(lw.last_workout_at, '1970-01-01'::timestamp),
                 COALESCE(ln.last_nutrition_at, '1970-01-01'::timestamp)
-            ) AS last_program_at,
-            CASE
-                WHEN COALESCE(lw.last_workout_at, '1970-01-01'::timestamp)
-                   >= COALESCE(ln.last_nutrition_at, '1970-01-01'::timestamp)
-                THEN 'workout'
-                ELSE 'nutrition'
-            END AS last_program_type
-
+            ) AS last_program_at
         FROM clients c
         JOIN users u ON u.id = c.user_id
         LEFT JOIN client_onboarding o ON o.user_id = u.id
@@ -415,7 +353,6 @@ def get_students_with_new_programs(
         """,
         (coach_id, coach_id, coach_id, days),
     )
-
     return {"students": cur.fetchall()}
 
 
@@ -428,43 +365,40 @@ def get_all_students_from_subscriptions(
     cur = db.cursor(cursor_factory=RealDictCursor)
 
     cur.execute(
-    """
-    WITH latest AS (
-        SELECT DISTINCT ON (s.client_user_id)
-            s.client_user_id,
-            s.coach_user_id,
-            s.status,
-            s.started_at,
-            s.ends_at,
-            s.created_at AS purchased_at
-        FROM subscriptions s
-        WHERE s.coach_user_id = %s
-        ORDER BY s.client_user_id, s.created_at DESC
+        """
+        WITH latest AS (
+            SELECT DISTINCT ON (s.client_user_id)
+                s.client_user_id,
+                s.coach_user_id,
+                s.status,
+                s.started_at,
+                s.ends_at,
+                s.created_at AS purchased_at
+            FROM subscriptions s
+            WHERE s.coach_user_id = %s
+            ORDER BY s.client_user_id, s.created_at DESC
+        )
+        SELECT
+            u.id AS student_id,
+            u.email,
+            COALESCE(o.full_name, u.email) AS full_name,
+            c.goal_type,
+            l.status,
+            l.started_at,
+            l.ends_at,
+            l.purchased_at,
+            CASE
+                WHEN l.status = 'active' AND l.ends_at > NOW() THEN TRUE
+                ELSE FALSE
+            END AS is_active
+        FROM latest l
+        JOIN users u ON u.id = l.client_user_id
+        LEFT JOIN clients c ON c.user_id = u.id
+        LEFT JOIN client_onboarding o ON o.user_id = u.id
+        ORDER BY l.purchased_at DESC;
+        """,
+        (coach_id,),
     )
-    SELECT
-        u.id AS student_id,
-        u.email,
-        COALESCE(o.full_name, u.email) AS full_name,
-        c.goal_type,
-        l.status,
-        l.started_at,
-        l.ends_at,
-        l.purchased_at,
-        CASE
-            WHEN l.status = 'active' AND l.ends_at > NOW() THEN TRUE
-            ELSE FALSE
-        END AS is_active
-    FROM latest l
-    JOIN users u ON u.id = l.client_user_id
-    LEFT JOIN clients c ON c.user_id = u.id
-    LEFT JOIN client_onboarding o ON o.user_id = u.id
-    ORDER BY l.purchased_at DESC;
-    """,
-    (coach_id,),
-)
-
-        
-
     return {"students": cur.fetchall()}
 
 
@@ -499,36 +433,6 @@ def get_active_students_from_subscriptions(
     return {"students": cur.fetchall()}
 
 
-@router.get("/students/new-purchases")
-def get_new_purchases(
-    days: int = Query(7, ge=1, le=365),
-    db=Depends(get_db),
-    current_user=Depends(require_role("coach")),
-):
-    coach_id = current_user["id"]
-    cur = db.cursor(cursor_factory=RealDictCursor)
-
-    cur.execute(
-        """
-        SELECT
-            u.id AS student_id,
-            u.email,
-            COALESCE(o.full_name, u.email) AS full_name,
-            c.goal_type,
-            s.created_at AS purchased_at,
-            EXTRACT(DAY FROM NOW() - s.created_at)::int AS days_ago
-        FROM subscriptions s
-        JOIN users u ON u.id = s.client_user_id
-        LEFT JOIN clients c ON c.user_id = u.id
-        LEFT JOIN client_onboarding o ON o.user_id = u.id
-        WHERE s.coach_user_id = %s
-          AND s.created_at >= NOW() - (%s || ' days')::interval
-        ORDER BY s.created_at DESC
-        """,
-        (coach_id, days),
-    )
-    return {"students": cur.fetchall()}
-
 
 # --------------------------------------------------
 # COACH PROFILE (ME)
@@ -543,16 +447,7 @@ def get_my_profile(
 
     cur.execute(
         """
-        SELECT
-            user_id,
-            bio,
-            photo_url,
-            price_per_month,
-            rating,
-            rating_count,
-            specialties,
-            instagram,
-            is_active
+        SELECT user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active
         FROM coaches
         WHERE user_id = %s
         """,
@@ -560,9 +455,17 @@ def get_my_profile(
     )
     row = cur.fetchone()
 
-    # Eğer coach kaydı yoksa 404 (istersen otomatik create de yaparız)
     if not row:
-        raise HTTPException(status_code=404, detail="Coach profile not found")
+        cur.execute(
+            """
+            INSERT INTO coaches (user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active)
+            VALUES (%s, '', NULL, NULL, 0, 0, ARRAY[]::text[], NULL, TRUE)
+            RETURNING user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active
+            """,
+            (coach_id,),
+        )
+        row = cur.fetchone()
+        db.commit()
 
     return {"profile": row}
 
@@ -576,29 +479,17 @@ def update_my_profile(
     coach_id = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
 
-    # Sadece izin verdiğimiz alanları alalım (güvenlik + kontrol)
-    allowed_fields = {
-        "bio",
-        "photo_url",
-        "price_per_month",
-        "specialties",
-        "instagram",
-        "is_active",
-    }
-
+    allowed_fields = {"bio", "photo_url", "price_per_month", "specialties", "instagram", "is_active"}
     updates = {k: payload.get(k) for k in payload.keys() if k in allowed_fields}
 
     if not updates:
         raise HTTPException(status_code=400, detail="No valid fields to update")
 
-    # Dynamic SET oluştur
     set_parts = []
     values = []
-    i = 1
     for k, v in updates.items():
-        set_parts.append(f"{k} = %s")
+        set_parts.append(f"{k}=%s")
         values.append(v)
-        i += 1
 
     values.append(coach_id)
 
@@ -607,24 +498,126 @@ def update_my_profile(
         UPDATE coaches
         SET {", ".join(set_parts)}
         WHERE user_id = %s
-        RETURNING
-            user_id,
-            bio,
-            photo_url,
-            price_per_month,
-            rating,
-            rating_count,
-            specialties,
-            instagram,
-            is_active
+        RETURNING user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active
         """,
         tuple(values),
     )
 
     row = cur.fetchone()
     if not row:
-        # coach satırı yoksa
         raise HTTPException(status_code=404, detail="Coach profile not found")
 
     db.commit()
     return {"ok": True, "profile": row}
+
+
+# --------------------------------------------------
+# PACKAGES (NEW)
+# --------------------------------------------------
+class CoachPackageCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    duration_days: int = Field(gt=0)
+    price: int = Field(ge=0)
+    is_active: bool = True
+
+
+class CoachPackageUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    duration_days: Optional[int] = Field(default=None, gt=0)
+    price: Optional[int] = Field(default=None, ge=0)
+    is_active: Optional[bool] = None
+
+
+@router.get("/packages")
+def list_my_packages(
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """
+        SELECT id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+        FROM coach_packages
+        WHERE coach_user_id = %s
+        ORDER BY is_active DESC, created_at DESC, id DESC
+        """,
+        (current_user["id"],),
+    )
+    return {"packages": cur.fetchall()}
+
+
+@router.post("/packages")
+def create_package(
+    body: CoachPackageCreate,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """
+        INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, is_active)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+        """,
+        (current_user["id"], body.name, body.description, body.duration_days, body.price, body.is_active),
+    )
+    row = cur.fetchone()
+    db.commit()
+    return {"package": row}
+
+
+@router.put("/packages/{package_id}")
+def update_package(
+    package_id: int,
+    body: CoachPackageUpdate,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute(
+        "SELECT id FROM coach_packages WHERE id=%s AND coach_user_id=%s",
+        (package_id, current_user["id"]),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    fields = []
+    values = []
+
+    if body.name is not None:
+        fields.append("name=%s")
+        values.append(body.name)
+    if body.description is not None:
+        fields.append("description=%s")
+        values.append(body.description)
+    if body.duration_days is not None:
+        fields.append("duration_days=%s")
+        values.append(body.duration_days)
+    if body.price is not None:
+        fields.append("price=%s")
+        values.append(body.price)
+    if body.is_active is not None:
+        fields.append("is_active=%s")
+        values.append(body.is_active)
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    values.extend([package_id, current_user["id"]])
+
+    cur.execute(
+        f"""
+        UPDATE coach_packages
+        SET {", ".join(fields)}
+        WHERE id=%s AND coach_user_id=%s
+        RETURNING id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+        """,
+        tuple(values),
+    )
+    row = cur.fetchone()
+    db.commit()
+    return {"package": row}
+
