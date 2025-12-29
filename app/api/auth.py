@@ -19,13 +19,16 @@ def signup(req: SignUpRequest, db=Depends(get_db)):
 
     hashed = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
 
+    # ✅ Flutter client app: role backend tarafından otomatik "client"
+    role = "client"
+
     cur.execute(
         """
         INSERT INTO users (email, password_hash, full_name, timezone, phone_number, role, created_at, updated_at)
         VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
         RETURNING id, email, full_name, role
         """,
-        (req.email, hashed, None, "Europe/Istanbul", req.phone, req.role),
+        (req.email, hashed, None, "Europe/Istanbul", req.phone, role),
     )
 
     user = cur.fetchone()
@@ -33,6 +36,7 @@ def signup(req: SignUpRequest, db=Depends(get_db)):
 
     token = create_token(user["id"])
     return {"token": token, "user": user}
+
 
 
 @router.post("/login")
