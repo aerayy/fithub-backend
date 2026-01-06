@@ -4,11 +4,12 @@ from psycopg2.extras import Json
 
 from app.core.database import get_db
 from app.schemas.onboarding import OnboardingRequest
+from app.core.security import require_role
 
 router = APIRouter(prefix="/client", tags=["client"])
 
 @router.post("/onboarding")
-def save_onboarding(req: OnboardingRequest, db=Depends(get_db)):
+def save_onboarding(req: OnboardingRequest, db=Depends(get_db), current_user=Depends(require_role("client"))):
     cur = db.cursor()
 
     cur.execute(
@@ -89,7 +90,7 @@ def save_onboarding(req: OnboardingRequest, db=Depends(get_db)):
                   body_part_focus, bad_habit, what_motivate, workout_place;
         """,
         {
-            "user_id": req.user_id,
+            "user_id": current_user["id"],
             "full_name": req.full_name,
             "age": req.age,
             "weight_kg": req.weight_kg,

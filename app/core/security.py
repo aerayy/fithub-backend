@@ -4,8 +4,9 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError, ExpiredSignatureError
 
-from app.core.config import JWT_SECRET, JWT_ALGORITHM
+from app.core.config import JWT_SECRET, JWT_ALGORITHM, ADMIN_API_KEY
 from app.core.database import get_db
+from fastapi import Header
 
 bearer_scheme = HTTPBearer()
 
@@ -56,3 +57,19 @@ def require_role(*roles: str):
         return user
     return _dep
 
+def verify_admin_key(x_admin_key: str = Header(..., alias="X-Admin-Key")):
+    """
+    Admin API key verification dependency.
+    Requires X-Admin-Key header to match ADMIN_API_KEY env var.
+    """
+    if not ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Admin API key not configured"
+        )
+    if x_admin_key != ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin key"
+        )
+    return True

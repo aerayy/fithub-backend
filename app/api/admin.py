@@ -1,7 +1,11 @@
 # app/api/admin.py
 from fastapi import APIRouter, Depends, HTTPException
-from app.core.security import require_role
+import bcrypt
+from psycopg2.extras import RealDictCursor
+
+from app.core.security import require_role, verify_admin_key
 from app.core.database import get_db
+from app.schemas.admin import CreateCoachRequest
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -231,3 +235,103 @@ def get_student_detail(
             "meals": meals,
         },
     }
+
+
+@router.post("/coaches")
+def create_coach(
+    req: CreateCoachRequest,
+    db=Depends(get_db),
+    _admin_key=Depends(verify_admin_key),
+):
+    """
+    Create a new coach account.
+    
+    This endpoint creates both:
+    1. A user record with role="coach"
+    2. A coach record with coach-specific details
+    
+    Requires X-Admin-Key header matching ADMIN_API_KEY environment variable.
+    """
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    
+    # Store original autocommit setting
+    original_autocommit = db.autocommit
+    
+    try:
+        # Start transaction (psycopg2 autocommit is False by default, but be explicit)
+        db.autocommit = False
+        
+        # Check if email already exists
+        cur.execute("SELECT id FROM users WHERE email = %s", (req.email,))
+        if cur.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail="Email already registered"
+            )
+        
+        # Hash password using the same method as /auth/signup
+        hashed = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
+        
+        # Insert into users table
+        cur.execute(
+            """
+            INSERT INTO users (email, password_hash, full_name, role, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, NOW(), NOW())
+            RETURNING id, email, full_name, role, created_at, updated_at
+            """,
+            (req.email, hashed, req.full_name, "coach"),
+        )
+        user = cur.fetchone()
+        user_id = user["id"]
+        
+        # Prepare specialties array (PostgreSQL text[])
+        specialties_array = req.specialties if req.specialties else []
+        
+        # Insert into coaches table
+        cur.execute(
+            """
+            INSERT INTO coaches (
+                user_id, bio, photo_url, price_per_month, 
+                rating, rating_count, specialties, instagram, is_active
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING user_id, bio, photo_url, price_per_month, 
+                     rating, rating_count, specialties, instagram, is_active
+            """,
+            (
+                user_id,
+                req.bio,
+                req.photo_url,
+                req.price_per_month,
+                req.rating,
+                req.rating_count if req.rating_count is not None else 0,
+                specialties_array,  # psycopg2 will handle array conversion
+                req.instagram,
+                req.is_active if req.is_active is not None else True,
+            ),
+        )
+        coach = cur.fetchone()
+        
+        # Commit transaction
+        db.commit()
+        
+        return {
+            "user_id": user_id,
+            "user": dict(user),
+            "coach": dict(coach),
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions after rollback
+        db.rollback()
+        raise
+    except Exception as e:
+        # Rollback on any other error
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to create coach: {str(e)}"
+        )
+    finally:
+        # Restore original autocommit setting
+        db.autocommit = original_autocommit

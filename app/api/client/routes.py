@@ -9,3 +9,8 @@ try:
 except Exception:
     # purchases.py yoksa bile server ayağa kalksın
     pass
+
+try:
+    from . import me  # noqa: F401
+except Exception:
+    pass
