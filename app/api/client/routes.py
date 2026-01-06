@@ -14,3 +14,8 @@ try:
     from . import me  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import coaches  # noqa: F401
+except Exception:
+    pass
