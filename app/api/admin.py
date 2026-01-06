@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 import bcrypt
 from psycopg2.extras import RealDictCursor
+import psycopg2
 
 from app.core.security import require_role, verify_admin_key
 from app.core.database import get_db
@@ -261,18 +262,10 @@ def create_coach(
         # Start transaction (psycopg2 autocommit is False by default, but be explicit)
         db.autocommit = False
         
-        # Check if email already exists
-        cur.execute("SELECT id FROM users WHERE email = %s", (req.email,))
-        if cur.fetchone():
-            raise HTTPException(
-                status_code=400,
-                detail="Email already registered"
-            )
-        
         # Hash password using the same method as /auth/signup
         hashed = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
         
-        # Insert into users table
+        # Insert into users table with role="coach"
         cur.execute(
             """
             INSERT INTO users (email, password_hash, full_name, role, created_at, updated_at)
@@ -284,7 +277,7 @@ def create_coach(
         user = cur.fetchone()
         user_id = user["id"]
         
-        # Prepare specialties array (PostgreSQL text[])
+        # Prepare specialties array (PostgreSQL text[]) - use empty array if None
         specialties_array = req.specialties if req.specialties else []
         
         # Insert into coaches table
@@ -321,6 +314,20 @@ def create_coach(
             "coach": dict(coach),
         }
         
+    except psycopg2.IntegrityError as e:
+        # Rollback on database constraint violations
+        db.rollback()
+        # Check if it's a unique violation (email already exists)
+        if e.pgcode == "23505":  # UniqueViolation error code
+            raise HTTPException(
+                status_code=409,
+                detail="Email already registered"
+            )
+        # Other integrity errors
+        raise HTTPException(
+            status_code=400,
+            detail=f"Database constraint violation: {str(e)}"
+        )
     except HTTPException:
         # Re-raise HTTP exceptions after rollback
         db.rollback()

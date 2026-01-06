@@ -61,15 +61,11 @@ def verify_admin_key(x_admin_key: str = Header(..., alias="X-Admin-Key")):
     """
     Admin API key verification dependency.
     Requires X-Admin-Key header to match ADMIN_API_KEY env var.
+    Returns 401 if missing or invalid (never crashes).
     """
-    if not ADMIN_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="Admin API key not configured"
-        )
-    if x_admin_key != ADMIN_API_KEY:
+    if not ADMIN_API_KEY or x_admin_key != ADMIN_API_KEY:
         raise HTTPException(
             status_code=401,
-            detail="Invalid admin key"
+            detail="Invalid or missing admin key"
         )
     return True
