@@ -10,6 +10,7 @@ from app.api.nutrition import router as nutrition_router
 from app.api.admin import router as admin_router
 from app.api.coach.routes import router as coach_router
 from app.api.client.routes import router as client_router
+from app.api.subscriptions import router as subscriptions_router
 
 
 app = FastAPI()
@@ -32,3 +33,4 @@ app.include_router(nutrition_router)
 app.include_router(admin_router)
 app.include_router(coach_router)
 app.include_router(client_router)
+app.include_router(subscriptions_router)
