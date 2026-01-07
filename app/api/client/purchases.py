@@ -1,7 +1,9 @@
 from fastapi import Depends, HTTPException, status
 from psycopg2.extras import RealDictCursor
 from psycopg2 import IntegrityError
-from datetime import datetime
+from datetime import datetime, timedelta
+from pydantic import BaseModel
+from typing import Optional
 from app.core.security import require_role
 from app.core.database import get_db
 from app.schemas.subscriptions import SubscriptionConfirmRequest, SubscriptionConfirmResponse
@@ -11,6 +13,234 @@ from .routes import router
 @router.get("/ping")
 def client_ping(current_user=Depends(require_role("client"))):
     return {"ok": True, "message": "client router works"}
+
+
+class CheckoutRequest(BaseModel):
+    coach_package_id: int
+
+
+@router.post("/checkout")
+def checkout(
+    request: CheckoutRequest,
+    current_user=Depends(require_role("client")),
+    db=Depends(get_db)
+):
+    """
+    Create a subscription from a coach package purchase.
+    
+    This endpoint:
+    1. Validates the package exists and is active
+    2. Gets coach_user_id from the package
+    3. Creates a subscription row with proper dates
+    4. Updates clients.assigned_coach_id to assign the coach
+    5. Handles existing subscriptions (deactivates old ones if same coach)
+    
+    Example curl test:
+    curl -X POST "http://localhost:8000/client/checkout" \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"coach_package_id": 123}'
+    """
+    client_user_id = current_user["id"]
+    coach_package_id = request.coach_package_id
+    
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        # Start transaction
+        # Get package details
+        cur.execute(
+            """
+            SELECT
+                id,
+                coach_user_id,
+                name,
+                description,
+                duration_days,
+                price,
+                is_active
+            FROM coach_packages
+            WHERE id = %s AND is_active = TRUE
+            """,
+            (coach_package_id,)
+        )
+        
+        package = cur.fetchone()
+        if not package:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Package not found or inactive"
+            )
+        
+        coach_user_id = package["coach_user_id"]
+        plan_name = package["name"]
+        duration_days = package["duration_days"]
+        price = package["price"]
+        
+        # Check for existing active subscriptions
+        cur.execute(
+            """
+            SELECT id, coach_user_id, status, ends_at
+            FROM subscriptions
+            WHERE client_user_id = %s
+              AND status = 'active'
+              AND (ends_at IS NULL OR ends_at > NOW())
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (client_user_id,)
+        )
+        
+        existing_sub = cur.fetchone()
+        
+        # Policy: If same coach, deactivate old subscription and create new one
+        # If different coach, allow purchase (reassign coach)
+        if existing_sub:
+            if existing_sub["coach_user_id"] == coach_user_id:
+                # Same coach: deactivate old subscription
+                cur.execute(
+                    """
+                    UPDATE subscriptions
+                    SET status = 'inactive'
+                    WHERE id = %s
+                    """,
+                    (existing_sub["id"],)
+                )
+            # If different coach, we'll just create a new subscription
+            # and reassign the coach (handled below)
+        
+        # Calculate dates
+        started_at = datetime.utcnow()
+        ends_at = started_at + timedelta(days=duration_days)
+        
+        # Create subscription
+        # Check if package_id column exists
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'subscriptions' AND column_name = 'package_id'
+            """
+        )
+        has_package_id = cur.fetchone() is not None
+        
+        if has_package_id:
+            cur.execute(
+                """
+                INSERT INTO subscriptions (
+                    client_user_id,
+                    coach_user_id,
+                    package_id,
+                    plan_name,
+                    status,
+                    started_at,
+                    ends_at,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                RETURNING id, client_user_id, coach_user_id, package_id, plan_name, status, started_at, ends_at, created_at
+                """,
+                (
+                    client_user_id,
+                    coach_user_id,
+                    coach_package_id,
+                    plan_name,
+                    "active",
+                    started_at,
+                    ends_at
+                )
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO subscriptions (
+                    client_user_id,
+                    coach_user_id,
+                    plan_name,
+                    status,
+                    started_at,
+                    ends_at,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                RETURNING id, client_user_id, coach_user_id, plan_name, status, started_at, ends_at, created_at
+                """,
+                (
+                    client_user_id,
+                    coach_user_id,
+                    plan_name,
+                    "active",
+                    started_at,
+                    ends_at
+                )
+            )
+        
+        new_subscription = cur.fetchone()
+        
+        # Update or insert clients.assigned_coach_id
+        cur.execute(
+            """
+            SELECT user_id FROM clients WHERE user_id = %s
+            """,
+            (client_user_id,)
+        )
+        client_exists = cur.fetchone()
+        
+        if client_exists:
+            # Update existing client
+            cur.execute(
+                """
+                UPDATE clients
+                SET assigned_coach_id = %s
+                WHERE user_id = %s
+                """,
+                (coach_user_id, client_user_id)
+            )
+        else:
+            # Insert new client row (shouldn't happen but handle gracefully)
+            cur.execute(
+                """
+                INSERT INTO clients (user_id, assigned_coach_id)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET assigned_coach_id = EXCLUDED.assigned_coach_id
+                """,
+                (client_user_id, coach_user_id)
+            )
+        
+        # Commit transaction
+        db.commit()
+        
+        return {
+            "ok": True,
+            "subscription": {
+                "id": new_subscription["id"],
+                "client_user_id": new_subscription["client_user_id"],
+                "coach_user_id": new_subscription["coach_user_id"],
+                "plan_name": new_subscription["plan_name"],
+                "status": new_subscription["status"],
+                "started_at": new_subscription["started_at"].isoformat() if new_subscription["started_at"] else None,
+                "ends_at": new_subscription["ends_at"].isoformat() if new_subscription["ends_at"] else None,
+            },
+            "coach_user_id": coach_user_id,
+            "package": {
+                "id": package["id"],
+                "name": package["name"],
+                "description": package.get("description"),
+                "duration_days": package["duration_days"],
+                "price": package["price"],
+            }
+        }
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"checkout: ERROR user={client_user_id} package={coach_package_id} error={str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 
 @router.post("/subscriptions/confirm", response_model=SubscriptionConfirmResponse)

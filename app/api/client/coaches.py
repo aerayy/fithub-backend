@@ -1,4 +1,4 @@
-from fastapi import Depends
+from fastapi import Depends, Query, HTTPException
 from psycopg2.extras import RealDictCursor
 
 from app.core.database import get_db
@@ -8,22 +8,63 @@ from .routes import router
 
 @router.get("/coaches")
 def get_coaches(
+    q: str = Query(None, description="Search query (searches in full_name, bio, specialties)"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
     """
-    Get list of active coaches.
+    Get list of active coaches with optional search and pagination.
     
     Returns coaches where is_active = true, ordered by rating DESC, rating_count DESC, user_id ASC.
     
+    Query params:
+    - q: Optional search query (searches in full_name, bio, specialties)
+    - limit: Maximum number of results (default: 20, max: 100)
+    - offset: Number of results to skip (default: 0)
+    
     Example curl test:
-    curl -X GET "http://localhost:8000/client/coaches" \
+    curl -X GET "http://localhost:8000/client/coaches?q=fitness&limit=5&offset=0" \
       -H "Authorization: Bearer YOUR_TOKEN"
     """
     cur = db.cursor(cursor_factory=RealDictCursor)
     
+    # Build WHERE clause with search
+    where_clauses = ["c.is_active = TRUE"]
+    params = []
+    
+    if q:
+        search_term = f"%{q.lower()}%"
+        where_clauses.append(
+            """(
+                LOWER(u.full_name) LIKE %s OR
+                LOWER(c.bio) LIKE %s OR
+                EXISTS (
+                    SELECT 1 FROM unnest(c.specialties) AS specialty
+                    WHERE LOWER(specialty) LIKE %s
+                )
+            )"""
+        )
+        params.extend([search_term, search_term, search_term])
+    
+    where_sql = " AND ".join(where_clauses)
+    
+    # Get total count for pagination
     cur.execute(
-        """
+        f"""
+        SELECT COUNT(*) as total
+        FROM coaches c
+        JOIN users u ON u.id = c.user_id
+        WHERE {where_sql}
+        """,
+        tuple(params)
+    )
+    total = cur.fetchone()["total"]
+    
+    # Get paginated results
+    cur.execute(
+        f"""
         SELECT
             c.user_id,
             u.full_name,
@@ -37,11 +78,13 @@ def get_coaches(
             c.is_active
         FROM coaches c
         JOIN users u ON u.id = c.user_id
-        WHERE c.is_active = TRUE
+        WHERE {where_sql}
         ORDER BY c.rating DESC NULLS LAST,
                  c.rating_count DESC NULLS LAST,
                  c.user_id ASC
-        """
+        LIMIT %s OFFSET %s
+        """,
+        tuple(params) + (limit, offset)
     )
     
     rows = cur.fetchall() or []
@@ -62,4 +105,90 @@ def get_coaches(
             "is_active": row.get("is_active", True),  # Default to True if NULL
         })
     
-    return {"coaches": coaches}
+    return {
+        "coaches": coaches,
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
+
+
+@router.get("/coaches/{coach_user_id}")
+def get_coach_detail(
+    coach_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """
+    Get detailed coach profile including active packages.
+    
+    Example curl test:
+    curl -X GET "http://localhost:8000/client/coaches/123" \
+      -H "Authorization: Bearer YOUR_TOKEN"
+    """
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    
+    # Get coach profile
+    cur.execute(
+        """
+        SELECT
+            c.user_id,
+            u.full_name,
+            c.bio,
+            c.photo_url,
+            c.price_per_month,
+            c.rating,
+            c.rating_count,
+            c.specialties,
+            c.instagram,
+            c.is_active
+        FROM coaches c
+        JOIN users u ON u.id = c.user_id
+        WHERE c.user_id = %s AND c.is_active = TRUE
+        """,
+        (coach_user_id,)
+    )
+    
+    coach_row = cur.fetchone()
+    if not coach_row:
+        raise HTTPException(status_code=404, detail="Coach not found or inactive")
+    
+    # Get active packages
+    cur.execute(
+        """
+        SELECT
+            id,
+            coach_user_id,
+            name,
+            description,
+            duration_days,
+            price,
+            is_active,
+            created_at,
+            updated_at
+        FROM coach_packages
+        WHERE coach_user_id = %s AND is_active = TRUE
+        ORDER BY price ASC, created_at DESC
+        """,
+        (coach_user_id,)
+    )
+    
+    packages = cur.fetchall() or []
+    
+    coach = {
+        "user_id": coach_row["user_id"],
+        "full_name": coach_row.get("full_name"),
+        "bio": coach_row.get("bio"),
+        "photo_url": coach_row.get("photo_url"),
+        "price_per_month": coach_row.get("price_per_month"),
+        "rating": coach_row.get("rating"),
+        "rating_count": coach_row.get("rating_count") or 0,
+        "specialties": coach_row.get("specialties") or [],
+        "instagram": coach_row.get("instagram"),
+        "is_active": coach_row.get("is_active", True),
+    }
+    
+    return {
+        "coach": coach,
+        "packages": packages
+    }
