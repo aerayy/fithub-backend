@@ -3,8 +3,10 @@ from psycopg2.extras import RealDictCursor
 from psycopg2 import IntegrityError
 from datetime import datetime, timedelta
 from typing import Optional
+import os
 from app.core.security import require_role
 from app.core.database import get_db
+from app.core.config import DB_HOST, DB_NAME, DB_USER, DB_PORT
 from app.schemas.subscriptions import SubscriptionConfirmRequest, SubscriptionConfirmResponse
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
@@ -14,6 +16,32 @@ router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 def subscriptions_ping():
     """Health check endpoint for subscriptions router"""
     return {"ok": True, "message": "subscriptions router works"}
+
+
+@router.get("/debug/db-info")
+def debug_db_info():
+    """
+    Debug endpoint to show database connection info (dev only).
+    Returns DB host, dbname, and user (no password).
+    Enable with DEBUG=true environment variable.
+    """
+    debug_enabled = os.getenv("DEBUG", "false").lower() == "true"
+    if not debug_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Debug endpoint disabled. Set DEBUG=true to enable."
+        )
+    
+    return {
+        "ok": True,
+        "db_info": {
+            "host": DB_HOST,
+            "dbname": DB_NAME,
+            "user": DB_USER,
+            "port": DB_PORT
+        },
+        "note": "Password is not shown for security"
+    }
 
 
 @router.post("/confirm", response_model=SubscriptionConfirmResponse)
@@ -32,11 +60,20 @@ def confirm_subscription(
     returns existing record instead of creating duplicate.
     
     Validates:
+    - coach_user_id exists in users table
     - coach_packages row exists with id = planId
     - coach_user_id in coach_packages matches coachId
     - package is active (is_active = true)
+    
+    Table columns used:
+    - subscriptions: client_user_id, coach_user_id, package_id, plan_name, status, 
+      purchased_at, started_at, ends_at, created_at, updated_at
+    - Optional: external_subscription_id or subscription_ref (if column exists)
     """
-    print(f"[SUBSCRIPTION_CONFIRM] Endpoint hit: path=/subscriptions/confirm")  # Log at start
+    # Log DB connection info (safe - no password)
+    print(f"[SUBSCRIPTION_CONFIRM] ===== ENDPOINT HIT =====")
+    print(f"[SUBSCRIPTION_CONFIRM] DB Connection: host={DB_HOST} dbname={DB_NAME} user={DB_USER}")
+    print(f"[SUBSCRIPTION_CONFIRM] Path: /subscriptions/confirm")
     
     # Extract parameters from query params or request body
     if coachId and planId and subscriptionId:
@@ -57,10 +94,17 @@ def confirm_subscription(
     
     client_user_id = current_user["id"]
     
-    # Log the attempt
-    print(f"[SUBSCRIPTION_CONFIRM] INPUT: client_user_id={client_user_id} coachId={coach_id} planId={plan_id} subscriptionId={subscription_ref}")
+    # Log the attempt BEFORE DB operations
+    print(f"[SUBSCRIPTION_CONFIRM] INPUT PARAMS:")
+    print(f"[SUBSCRIPTION_CONFIRM]   - client_user_id (from JWT): {client_user_id}")
+    print(f"[SUBSCRIPTION_CONFIRM]   - coachId: {coach_id}")
+    print(f"[SUBSCRIPTION_CONFIRM]   - planId: {plan_id}")
+    print(f"[SUBSCRIPTION_CONFIRM]   - subscriptionId: {subscription_ref}")
     
     cur = db.cursor(cursor_factory=RealDictCursor)
+    
+    # Validate coach_user_id exists in users table
+    print(f"[SUBSCRIPTION_CONFIRM] STEP 1: Validating coach exists in users table...")
     
     # Check if subscription_ref/external_subscription_id column exists for idempotency
     def _has_column(cur, table: str, column: str) -> bool:
@@ -116,7 +160,7 @@ def confirm_subscription(
         if coach_id.startswith("coach_"):
             try:
                 coach_user_id = int(coach_id.replace("coach_", ""))
-                print(f"[SUBSCRIPTION_CONFIRM] Parsed coachId '{coach_id}' -> {coach_user_id}")
+                print(f"[SUBSCRIPTION_CONFIRM] STEP 2: Parsed coachId '{coach_id}' -> {coach_user_id}")
             except ValueError:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -125,17 +169,33 @@ def confirm_subscription(
         else:
             try:
                 coach_user_id = int(coach_id)
-                print(f"[SUBSCRIPTION_CONFIRM] Parsed coachId '{coach_id}' -> {coach_user_id}")
+                print(f"[SUBSCRIPTION_CONFIRM] STEP 2: Parsed coachId '{coach_id}' -> {coach_user_id}")
             except ValueError:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid coach_id: {coach_id}. Expected numeric ID or 'coach_18' format"
                 )
         
+        # Validate coach_user_id exists in users table
+        cur.execute(
+            """
+            SELECT id, email, role FROM users WHERE id = %s
+            """,
+            (coach_user_id,)
+        )
+        coach_user = cur.fetchone()
+        if not coach_user:
+            print(f"[SUBSCRIPTION_CONFIRM] VALIDATION FAILED: Coach user_id {coach_user_id} does not exist in users table")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Coach with id {coach_user_id} not found in users table"
+            )
+        print(f"[SUBSCRIPTION_CONFIRM] STEP 3: Coach validation PASSED - user_id={coach_user_id} email={coach_user.get('email')} role={coach_user.get('role')}")
+        
         # Parse planId: must be integer (package_id)
         try:
             package_id_int = int(plan_id)
-            print(f"[SUBSCRIPTION_CONFIRM] Parsed planId '{plan_id}' -> package_id={package_id_int}")
+            print(f"[SUBSCRIPTION_CONFIRM] STEP 4: Parsed planId '{plan_id}' -> package_id={package_id_int}")
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -143,6 +203,7 @@ def confirm_subscription(
             )
         
         # Validate package exists, is active, and belongs to coach
+        print(f"[SUBSCRIPTION_CONFIRM] STEP 5: Validating package {package_id_int} exists, is active, and belongs to coach {coach_user_id}...")
         cur.execute(
             """
             SELECT id, name, duration_days, coach_user_id, is_active
@@ -154,7 +215,7 @@ def confirm_subscription(
         package_info = cur.fetchone()
         
         if not package_info:
-            print(f"[SUBSCRIPTION_CONFIRM] VALIDATION FAILED: Package {package_id_int} not found")
+            print(f"[SUBSCRIPTION_CONFIRM] VALIDATION FAILED: Package {package_id_int} not found in coach_packages table")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Package {package_id_int} not found"
@@ -162,21 +223,22 @@ def confirm_subscription(
         
         # Validate package is active
         if not package_info.get("is_active"):
-            print(f"[SUBSCRIPTION_CONFIRM] VALIDATION FAILED: Package {package_id_int} is not active")
+            print(f"[SUBSCRIPTION_CONFIRM] VALIDATION FAILED: Package {package_id_int} is not active (is_active={package_info.get('is_active')})")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Package {package_id_int} is not active"
             )
         
         # Validate package belongs to coach
-        if package_info["coach_user_id"] != coach_user_id:
-            print(f"[SUBSCRIPTION_CONFIRM] VALIDATION FAILED: Package {package_id_int} (coach_user_id={package_info['coach_user_id']}) does not belong to coach {coach_user_id}")
+        package_coach_id = package_info["coach_user_id"]
+        if package_coach_id != coach_user_id:
+            print(f"[SUBSCRIPTION_CONFIRM] VALIDATION FAILED: Package {package_id_int} belongs to coach_user_id={package_coach_id}, but requested coachId={coach_user_id}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Package {package_id_int} does not belong to coach {coach_user_id}"
+                detail=f"Package {package_id_int} does not belong to coach {coach_user_id}. Expected coach_user_id: {package_coach_id}"
             )
         
-        print(f"[SUBSCRIPTION_CONFIRM] VALIDATION PASSED: Package {package_id_int} exists, is active, and belongs to coach {coach_user_id}")
+        print(f"[SUBSCRIPTION_CONFIRM] STEP 6: Package validation PASSED - package_id={package_id_int} name='{package_info['name']}' coach_user_id={package_coach_id} is_active=True")
         
         # Extract package details
         package_id = package_id_int
@@ -247,37 +309,69 @@ def confirm_subscription(
         else:
             print(f"[SUBSCRIPTION_CONFIRM] WARNING: No external_subscription_id or subscription_ref column found. subscriptionId={subscription_ref} will not be stored but will be returned in response.")
         
-        # Build RETURNING clause
-        returning_cols = ["id", "client_user_id", "coach_user_id", "package_id", "plan_name", "status", "started_at", "ends_at", "purchased_at"]
+        # Build RETURNING clause - use RETURNING * to get all inserted columns
+        print(f"[SUBSCRIPTION_CONFIRM] STEP 7: Preparing INSERT into subscriptions table...")
+        print(f"[SUBSCRIPTION_CONFIRM]   Columns: {', '.join(columns)}")
+        print(f"[SUBSCRIPTION_CONFIRM]   Values: client_user_id={client_user_id}, coach_user_id={actual_coach_user_id}, package_id={package_id}, plan_name='{plan_name}', status='active', purchased_at={now}, started_at={started_at}, ends_at={ends_at}")
         
-        # Insert subscription
+        # Insert subscription with RETURNING * to get all columns
         insert_query = f"""
             INSERT INTO subscriptions ({", ".join(columns)})
             VALUES ({", ".join(placeholders)})
-            RETURNING {", ".join(returning_cols)}
+            RETURNING *
         """
         
+        print(f"[SUBSCRIPTION_CONFIRM] STEP 8: Executing INSERT query...")
         cur.execute(insert_query, tuple(values))
         
         new_subscription = cur.fetchone()
+        if not new_subscription:
+            db.rollback()
+            print(f"[SUBSCRIPTION_CONFIRM] CRITICAL ERROR: INSERT executed but RETURNING * returned no row!")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="INSERT succeeded but no row returned. This should not happen."
+            )
+        
+        print(f"[SUBSCRIPTION_CONFIRM] STEP 9: INSERT successful, fetched row: id={new_subscription.get('id')}")
+        print(f"[SUBSCRIPTION_CONFIRM] STEP 10: Committing transaction...")
         db.commit()  # Explicit commit after insert
         
-        print(f"[SUBSCRIPTION_CONFIRM] SUCCESS: Created subscription id={new_subscription['id']} for client={client_user_id} coach={actual_coach_user_id} package={package_id} ref={subscription_ref}")
+        # Verify commit succeeded by checking if we can still see the row
+        cur.execute("SELECT id FROM subscriptions WHERE id = %s", (new_subscription['id'],))
+        verify_row = cur.fetchone()
+        if not verify_row:
+            print(f"[SUBSCRIPTION_CONFIRM] CRITICAL WARNING: Row {new_subscription['id']} not found after commit! This indicates a commit failure.")
+        else:
+            print(f"[SUBSCRIPTION_CONFIRM] STEP 11: Commit verified - row id={new_subscription['id']} exists in database")
         
+        print(f"[SUBSCRIPTION_CONFIRM] ===== SUCCESS =====")
+        print(f"[SUBSCRIPTION_CONFIRM] Created subscription: id={new_subscription['id']} client={client_user_id} coach={actual_coach_user_id} package={package_id} ref={subscription_ref}")
+        
+        # Convert all datetime fields to ISO format for JSON response
+        subscription_dict = dict(new_subscription)  # Convert RealDictRow to dict
+        for key in ['started_at', 'ends_at', 'purchased_at', 'created_at', 'updated_at', 'decided_at']:
+            if key in subscription_dict and subscription_dict[key] is not None:
+                if isinstance(subscription_dict[key], datetime):
+                    subscription_dict[key] = subscription_dict[key].isoformat()
+        
+        response_data = {
+            "id": subscription_dict["id"],
+            "client_user_id": subscription_dict["client_user_id"],
+            "coach_id": str(subscription_dict["coach_user_id"]),
+            "package_id": subscription_dict.get("package_id"),
+            "plan_id": subscription_dict.get("plan_name") or plan_id,
+            "subscription_ref": subscription_ref,  # Return the provided ref
+            "status": subscription_dict["status"],
+            "started_at": subscription_dict.get("started_at"),
+            "ends_at": subscription_dict.get("ends_at"),
+            "purchased_at": subscription_dict.get("purchased_at"),
+        }
+        
+        print(f"[SUBSCRIPTION_CONFIRM] Returning response with subscription id={response_data['id']}")
         return SubscriptionConfirmResponse(
             ok=True,
-            subscription={
-                "id": new_subscription["id"],
-                "client_user_id": new_subscription["client_user_id"],
-                "coach_id": str(new_subscription["coach_user_id"]),
-                "package_id": new_subscription.get("package_id"),
-                "plan_id": new_subscription.get("plan_name") or plan_id,
-                "subscription_ref": subscription_ref,  # Return the provided ref
-                "status": new_subscription["status"],
-                "started_at": new_subscription["started_at"].isoformat() if new_subscription["started_at"] else None,
-                "ends_at": new_subscription["ends_at"].isoformat() if new_subscription["ends_at"] else None,
-                "purchased_at": new_subscription["purchased_at"].isoformat() if new_subscription["purchased_at"] else None,
-            },
+            subscription=response_data,
             created=True
         )
         
@@ -326,11 +420,18 @@ def confirm_subscription(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to create subscription: {str(e)}"
         )
+    except HTTPException:
+        # Re-raise HTTP exceptions (they already have proper status codes)
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
-        print(f"[SUBSCRIPTION_CONFIRM] ERROR: client={client_user_id} coach={coach_id} plan={plan_id} ref={subscription_ref} error={str(e)}")
+        print(f"[SUBSCRIPTION_CONFIRM] ===== ERROR =====")
+        print(f"[SUBSCRIPTION_CONFIRM] ERROR: client={client_user_id} coach={coach_id} plan={plan_id} ref={subscription_ref}")
+        print(f"[SUBSCRIPTION_CONFIRM] Error type: {type(e).__name__}")
+        print(f"[SUBSCRIPTION_CONFIRM] Error message: {str(e)}")
         import traceback
-        print(f"[SUBSCRIPTION_CONFIRM] TRACEBACK: {traceback.format_exc()}")
+        print(f"[SUBSCRIPTION_CONFIRM] TRACEBACK:\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal server error: {str(e)}"
