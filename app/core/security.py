@@ -1,4 +1,5 @@
 # app/core/security.py
+import logging
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -7,6 +8,8 @@ from jose import jwt, JWTError, ExpiredSignatureError
 from app.core.config import JWT_SECRET, JWT_ALGORITHM, ADMIN_API_KEY
 from app.core.database import get_db
 from fastapi import Header
+
+logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer()
 
@@ -40,9 +43,20 @@ def get_current_user(
 
     cur = db.cursor()
     cur.execute("SELECT id, email, role FROM users WHERE id = %s", (user_id,))
-    user = cur.fetchone()
-    if not user:
+    user_row = cur.fetchone()
+    if not user_row:
         raise HTTPException(status_code=401, detail="User not found")
+    
+    # Convert RealDictRow to dict and ensure we have the required fields
+    user = {
+        "id": user_row["id"],
+        "email": user_row["email"],
+        "role": user_row["role"],
+    }
+    
+    # Debug log
+    logger.debug(f"get_current_user: user_id={user['id']}, role={user['role']}")
+    
     return user
 
 def require_role(*roles: str):
