@@ -1,4 +1,5 @@
 # app/api/auth.py
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 import bcrypt
 from fastapi.security import OAuth2PasswordRequestForm
@@ -6,6 +7,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 from app.core.database import get_db
 from app.core.security import create_token
 from app.schemas.auth import SignUpRequest, LoginRequest
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -32,6 +35,24 @@ def signup(req: SignUpRequest, db=Depends(get_db)):
     )
 
     user = cur.fetchone()
+    user_id = user["id"]
+    
+    # Insert into clients table for client role users
+    # Using ON CONFLICT DO NOTHING for idempotency (if row already exists, skip)
+    cur.execute(
+        """
+        INSERT INTO clients (user_id, onboarding_done)
+        VALUES (%s, false)
+        ON CONFLICT (user_id) DO NOTHING
+        """,
+        (user_id,),
+    )
+    
+    if cur.rowcount > 0:
+        logger.debug(f"Created clients row for user_id={user_id} during signup")
+    else:
+        logger.debug(f"clients row already exists for user_id={user_id}, skipped insert")
+    
     db.commit()
 
     token = create_token(user["id"])

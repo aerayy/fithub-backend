@@ -1,4 +1,4 @@
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from app.core.database import get_db
 from app.core.security import require_role
 from .routes import router
@@ -11,7 +11,6 @@ def client_me(
 ):
     cur = db.cursor()
 
-    # clients tablosu yoksa bile user döndürerek patlamasın diye LEFT JOIN
     cur.execute(
         """
         SELECT
@@ -32,18 +31,23 @@ def client_me(
 
     row = cur.fetchone()
 
-    # row dict gibi dönüyor (RealDictCursor ise)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Client data - defaults to False/null if clients row doesn't exist (shouldn't happen with new signups)
+    client = {
+        "onboarding_done": row["onboarding_done"] if row["onboarding_done"] is not None else False,
+        "gender": row["gender"],
+        "goal_type": row["goal_type"],
+        "activity_level": row["activity_level"],
+        "assigned_coach_id": row["assigned_coach_id"],
+    }
+
     return {
         "user": {
             "id": row["user_id"],
             "email": row["email"],
             "role": row["role"],
         },
-        "client": {
-            "onboarding_done": row.get("onboarding_done", False),
-            "gender": row.get("gender"),
-            "goal_type": row.get("goal_type"),
-            "activity_level": row.get("activity_level"),
-            "assigned_coach_id": row.get("assigned_coach_id"),
-        },
+        "client": client,
     }
