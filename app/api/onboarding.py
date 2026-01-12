@@ -9,9 +9,14 @@ from app.core.security import require_role
 router = APIRouter(prefix="/client", tags=["client"])
 
 @router.post("/onboarding")
-def save_onboarding(req: OnboardingRequest, db=Depends(get_db), current_user=Depends(require_role("client"))):
+def save_onboarding(
+    req: OnboardingRequest,
+    db=Depends(get_db),
+    current_user=Depends(require_role("client"))
+):
     cur = db.cursor()
 
+    # 1️⃣ Onboarding verisini kaydet / güncelle
     cur.execute(
         """
         INSERT INTO client_onboarding (
@@ -85,9 +90,7 @@ def save_onboarding(req: OnboardingRequest, db=Depends(get_db), current_user=Dep
             bad_habit           = EXCLUDED.bad_habit,
             what_motivate       = EXCLUDED.what_motivate,
             workout_place       = EXCLUDED.workout_place,
-            updated_at          = NOW()
-        RETURNING id, user_id, full_name, age, weight_kg, height_cm, your_goal, experience,
-                  body_part_focus, bad_habit, what_motivate, workout_place;
+            updated_at          = NOW();
         """,
         {
             "user_id": current_user["id"],
@@ -107,16 +110,31 @@ def save_onboarding(req: OnboardingRequest, db=Depends(get_db), current_user=Dep
             "pref_workout_length": req.pref_workout_length,
             "how_motivated": req.how_motivated,
             "plan_reference": req.plan_reference,
-            "body_part_focus": Json(req.body_part_focus) if req.body_part_focus is not None else None,
-            "bad_habit": Json(req.bad_habit) if req.bad_habit is not None else None,
-            "what_motivate": Json(req.what_motivate) if req.what_motivate is not None else None,
-            "workout_place": Json(req.workout_place) if req.workout_place is not None else None,
+            "body_part_focus": Json(req.body_part_focus) if req.body_part_focus else None,
+            "bad_habit": Json(req.bad_habit) if req.bad_habit else None,
+            "what_motivate": Json(req.what_motivate) if req.what_motivate else None,
+            "workout_place": Json(req.workout_place) if req.workout_place else None,
         },
     )
 
-    profile = cur.fetchone()
+    # 2️⃣ 🔴 EN KRİTİK SATIR (ŞU AN SİSTEMİ KURTARAN)
+    cur.execute(
+        """
+        UPDATE clients
+        SET onboarding_done = TRUE,
+            updated_at = NOW()
+        WHERE user_id = %s
+        """,
+        (current_user["id"],),
+    )
+
     db.commit()
-    return {"profile": profile}
+
+    return {
+        "success": True,
+        "onboarding_done": True
+    }
+
 
 @router.get("/onboarding/{user_id}")
 def get_onboarding(user_id: int, db=Depends(get_db)):
