@@ -16,7 +16,7 @@ def save_onboarding(
 ):
     cur = db.cursor()
 
-    # 1️⃣ Onboarding verisini kaydet / güncelle
+    # 1) Onboarding verisini kaydet / güncelle
     cur.execute(
         """
         INSERT INTO client_onboarding (
@@ -117,22 +117,33 @@ def save_onboarding(
         },
     )
 
-    # 2️⃣ 🔴 EN KRİTİK SATIR (ŞU AN SİSTEMİ KURTARAN)
+    # 2) clients satırı yoksa oluştur (garanti)
+    cur.execute(
+        """
+        INSERT INTO clients (user_id, onboarding_done, created_at)
+        VALUES (%s, FALSE, NOW())
+        ON CONFLICT (user_id) DO NOTHING
+        """,
+        (current_user["id"],),
+    )
+
+    # 3) onboarding flag'i TRUE yap
     cur.execute(
         """
         UPDATE clients
-        SET onboarding_done = TRUE,
-            updated_at = NOW()
+        SET onboarding_done = TRUE
         WHERE user_id = %s
         """,
         (current_user["id"],),
     )
+    updated_rows = cur.rowcount
 
     db.commit()
 
     return {
         "success": True,
-        "onboarding_done": True
+        "onboarding_done": True,
+        "updated_rows": updated_rows,
     }
 
 
