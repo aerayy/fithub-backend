@@ -16,10 +16,14 @@ from app.api.subscriptions import router as subscriptions_router
 app = FastAPI()
 
 # ✅ DEV MODE: Her origin'e izin ver (cookie yok -> allow_credentials=False şart)
+import os
+
+origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=origins,          # <-- "*" yok
+    allow_credentials=True,         # <-- auth/cookie varsa şart
     allow_methods=["*"],
     allow_headers=["*"],
 )

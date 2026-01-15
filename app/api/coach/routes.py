@@ -3,7 +3,9 @@ from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 import json
-
+from fastapi import APIRouter, Depends, HTTPException
+from psycopg2.extras import RealDictCursor
+import psycopg2
 from app.core.database import get_db
 from app.core.security import require_role
 from app.api.coach.students import router as students_router
@@ -582,100 +584,88 @@ class CoachPackageUpdate(BaseModel):
 
 
 @router.get("/packages")
-def list_my_packages(
-    db=Depends(get_db),
-    current_user=Depends(require_role("coach")),
-):
+def list_my_packages(db=Depends(get_db), current_user=Depends(require_role("coach"))):
     cur = db.cursor(cursor_factory=RealDictCursor)
-    cur.execute(
-        """
-        SELECT id, coach_user_id, name, description, duration_days, price, is_active, services, created_at, updated_at
-        FROM coach_packages
-        WHERE coach_user_id = %s
-        ORDER BY is_active DESC, created_at DESC, id DESC
-        """,
-        (current_user["id"],),
-    )
-    return {"packages": cur.fetchall()}
+    try:
+        cur.execute(
+            """
+            SELECT id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+            FROM coach_packages
+            WHERE coach_user_id = %s
+            ORDER BY is_active DESC, created_at DESC, id DESC
+            """,
+            (current_user["id"],),
+        )
+        return {"packages": cur.fetchall()}
+    except psycopg2.Error as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB error in /coach/packages: {e.pgerror or str(e)}")
 
 
 @router.post("/packages")
-def create_package(
-    body: CoachPackageCreate,
-    db=Depends(get_db),
-    current_user=Depends(require_role("coach")),
-):
+def create_package(body: CoachPackageCreate, db=Depends(get_db), current_user=Depends(require_role("coach"))):
     cur = db.cursor(cursor_factory=RealDictCursor)
-    
-    # Normalize services: None -> empty array
-    services_list = body.services if body.services is not None else []
-    
-    cur.execute(
-        """
-        INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, is_active, services)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        RETURNING id, coach_user_id, name, description, duration_days, price, is_active, services, created_at, updated_at
-        """,
-        (current_user["id"], body.name, body.description, body.duration_days, body.price, body.is_active, services_list),
-    )
-    row = cur.fetchone()
-    db.commit()
-    return {"package": row}
+    try:
+        cur.execute(
+            """
+            INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+            """,
+            (current_user["id"], body.name, body.description, body.duration_days, body.price, body.is_active),
+        )
+        row = cur.fetchone()
+        db.commit()
+        return {"package": row}
+    except psycopg2.Error as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB error in POST /coach/packages: {e.pgerror or str(e)}")
 
 
 @router.put("/packages/{package_id}")
-def update_package(
-    package_id: int,
-    body: CoachPackageUpdate,
-    db=Depends(get_db),
-    current_user=Depends(require_role("coach")),
-):
+def update_package(package_id: int, body: CoachPackageUpdate, db=Depends(get_db), current_user=Depends(require_role("coach"))):
     cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            "SELECT id FROM coach_packages WHERE id=%s AND coach_user_id=%s",
+            (package_id, current_user["id"]),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Package not found")
 
-    cur.execute(
-        "SELECT id FROM coach_packages WHERE id=%s AND coach_user_id=%s",
-        (package_id, current_user["id"]),
-    )
-    if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Package not found")
+        fields = []
+        values = []
 
-    fields = []
-    values = []
+        if body.name is not None:
+            fields.append("name=%s"); values.append(body.name)
+        if body.description is not None:
+            fields.append("description=%s"); values.append(body.description)
+        if body.duration_days is not None:
+            fields.append("duration_days=%s"); values.append(body.duration_days)
+        if body.price is not None:
+            fields.append("price=%s"); values.append(body.price)
+        if body.is_active is not None:
+            fields.append("is_active=%s"); values.append(body.is_active)
 
-    if body.name is not None:
-        fields.append("name=%s")
-        values.append(body.name)
-    if body.description is not None:
-        fields.append("description=%s")
-        values.append(body.description)
-    if body.duration_days is not None:
-        fields.append("duration_days=%s")
-        values.append(body.duration_days)
-    if body.price is not None:
-        fields.append("price=%s")
-        values.append(body.price)
-    if body.is_active is not None:
-        fields.append("is_active=%s")
-        values.append(body.is_active)
-    if body.services is not None:
-        fields.append("services=%s")
-        values.append(body.services)
+        if not fields:
+            raise HTTPException(status_code=400, detail="No fields to update")
 
-    if not fields:
-        raise HTTPException(status_code=400, detail="No fields to update")
+        values.extend([package_id, current_user["id"]])
 
-    values.extend([package_id, current_user["id"]])
-
-    cur.execute(
-        f"""
-        UPDATE coach_packages
-        SET {", ".join(fields)}
-        WHERE id=%s AND coach_user_id=%s
-        RETURNING id, coach_user_id, name, description, duration_days, price, is_active, services, created_at, updated_at
-        """,
-        tuple(values),
-    )
-    row = cur.fetchone()
-    db.commit()
-    return {"package": row}
-
+        cur.execute(
+            f"""
+            UPDATE coach_packages
+            SET {", ".join(fields)}
+            WHERE id=%s AND coach_user_id=%s
+            RETURNING id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+            """,
+            tuple(values),
+        )
+        row = cur.fetchone()
+        db.commit()
+        return {"package": row}
+    except HTTPException:
+        raise
+    except psycopg2.Error as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB error in PUT /coach/packages: {e.pgerror or str(e)}")
