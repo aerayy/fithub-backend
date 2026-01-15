@@ -24,3 +24,8 @@ try:
     from . import state  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import daily_targets  # noqa: F401
+except Exception:
+    pass
