@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg2.extras import RealDictCursor
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List
 import json
 
 from app.core.database import get_db
@@ -11,6 +11,20 @@ from app.api.coach.students import router as students_router
 
 router = APIRouter(prefix="/coach", tags=["coach"])
 router.include_router(students_router)
+
+# Predefined service tags (for future frontend use)
+PREDEFINED_SERVICE_TAGS = [
+    "7/24 Chat",
+    "Form Analysis",
+    "Nutrition Plan",
+    "Personalized Workout",
+    "Video Call",
+    "1:1 Training",
+    "Weekly Check-in",
+    "Supplement Guidance",
+    "Mobility/Stretching",
+    "Progress Tracking"
+]
 
 
 def _fetchone_id(row):
@@ -514,12 +528,43 @@ def update_my_profile(
 # --------------------------------------------------
 # PACKAGES (NEW)
 # --------------------------------------------------
+def validate_services(services: Optional[List[str]]) -> List[str]:
+    """
+    Validate and normalize services list.
+    - If None, return empty list
+    - Max 12 tags
+    - Each tag max 40 chars, trimmed
+    """
+    if services is None:
+        return []
+    
+    # Trim and filter empty strings
+    normalized = [s.strip() for s in services if s and s.strip()]
+    
+    # Max 12 tags
+    if len(normalized) > 12:
+        raise ValueError("Maximum 12 service tags allowed")
+    
+    # Each tag max 40 chars
+    for tag in normalized:
+        if len(tag) > 40:
+            raise ValueError(f"Service tag '{tag}' exceeds 40 characters")
+    
+    return normalized
+
+
 class CoachPackageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: Optional[str] = Field(default=None, max_length=2000)
     duration_days: int = Field(gt=0)
     price: int = Field(ge=0)
     is_active: bool = True
+    services: Optional[List[str]] = Field(default=None, description="List of service tags (max 12, each max 40 chars)")
+    
+    @field_validator('services')
+    @classmethod
+    def validate_services_field(cls, v):
+        return validate_services(v)
 
 
 class CoachPackageUpdate(BaseModel):
@@ -528,6 +573,12 @@ class CoachPackageUpdate(BaseModel):
     duration_days: Optional[int] = Field(default=None, gt=0)
     price: Optional[int] = Field(default=None, ge=0)
     is_active: Optional[bool] = None
+    services: Optional[List[str]] = Field(default=None, description="List of service tags (max 12, each max 40 chars)")
+    
+    @field_validator('services')
+    @classmethod
+    def validate_services_field(cls, v):
+        return validate_services(v)
 
 
 @router.get("/packages")
@@ -538,7 +589,7 @@ def list_my_packages(
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute(
         """
-        SELECT id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+        SELECT id, coach_user_id, name, description, duration_days, price, is_active, services, created_at, updated_at
         FROM coach_packages
         WHERE coach_user_id = %s
         ORDER BY is_active DESC, created_at DESC, id DESC
@@ -555,13 +606,17 @@ def create_package(
     current_user=Depends(require_role("coach")),
 ):
     cur = db.cursor(cursor_factory=RealDictCursor)
+    
+    # Normalize services: None -> empty array
+    services_list = body.services if body.services is not None else []
+    
     cur.execute(
         """
-        INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, is_active)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+        INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, is_active, services)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, coach_user_id, name, description, duration_days, price, is_active, services, created_at, updated_at
         """,
-        (current_user["id"], body.name, body.description, body.duration_days, body.price, body.is_active),
+        (current_user["id"], body.name, body.description, body.duration_days, body.price, body.is_active, services_list),
     )
     row = cur.fetchone()
     db.commit()
@@ -602,6 +657,9 @@ def update_package(
     if body.is_active is not None:
         fields.append("is_active=%s")
         values.append(body.is_active)
+    if body.services is not None:
+        fields.append("services=%s")
+        values.append(body.services)
 
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -613,7 +671,7 @@ def update_package(
         UPDATE coach_packages
         SET {", ".join(fields)}
         WHERE id=%s AND coach_user_id=%s
-        RETURNING id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+        RETURNING id, coach_user_id, name, description, duration_days, price, is_active, services, created_at, updated_at
         """,
         tuple(values),
     )

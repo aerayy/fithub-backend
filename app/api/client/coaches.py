@@ -164,6 +164,7 @@ def get_coach_detail(
             duration_days,
             price,
             is_active,
+            services,
             created_at,
             updated_at
         FROM coach_packages
