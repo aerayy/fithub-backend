@@ -16,14 +16,24 @@ from app.api.subscriptions import router as subscriptions_router
 app = FastAPI()
 
 # ✅ DEV MODE: Her origin'e izin ver (cookie yok -> allow_credentials=False şart)
-import os
+import re
 
-origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+cors_origins = os.getenv("CORS_ORIGINS", "")
+origins = []
+
+for origin in cors_origins.split(","):
+    origin = origin.strip()
+    if origin == "*" or origin == "http://localhost:*":
+        # Development: Allow all localhost ports
+        origins.append(re.compile(r"http://localhost:\d+"))
+        origins.append(re.compile(r"http://127\.0\.0\.1:\d+"))
+    else:
+        origins.append(origin)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,          # <-- "*" yok
-    allow_credentials=True,         # <-- auth/cookie varsa şart
+    allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+",  # Regex kullan
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
