@@ -142,39 +142,29 @@ def save_onboarding(
         (user_id,),
     )
 
-    # 3) Validate required fields before updating clients table
-    if req.weight_kg is None or req.height_cm is None:
-        logger.warning(f"[ONBOARDING] Missing required measurements for user_id={user_id}: weight_kg={req.weight_kg}, height_cm={req.height_cm}")
-        # Still allow onboarding to complete, but log warning
-        # The daily-targets endpoint will catch this and return 400
-
-    # 4) Update clients table with profile data and set onboarding_done = TRUE
-    # Map your_goal -> goal_type for clients table
-    update_params = {
-        "user_id": user_id,
-        "weight_kg": req.weight_kg,
-        "height_cm": req.height_cm,
-        "gender": req.gender,
-        "goal_type": req.your_goal,  # Map your_goal to goal_type
-    }
-    
-    logger.debug(f"[ONBOARDING] Updating clients table with params: {update_params}")
+    # 3) Sync client_onboarding -> clients table
+    # Use JOIN-based UPDATE to ensure clients table matches client_onboarding
+    # This fixes cases where client_onboarding has data but clients table doesn't
+    logger.debug(f"[ONBOARDING] Syncing client_onboarding -> clients for user_id={user_id}")
     
     cur.execute(
         """
         UPDATE clients
-        SET 
+        SET
+            gender = co.gender,
+            height_cm = co.height_cm,
+            weight_kg = co.weight_kg,
+            goal_type = co.your_goal,
             onboarding_done = TRUE,
-            weight_kg = %(weight_kg)s,
-            height_cm = %(height_cm)s,
-            gender = %(gender)s,
-            goal_type = %(goal_type)s
-        WHERE user_id = %(user_id)s
+            updated_at = NOW()
+        FROM client_onboarding co
+        WHERE clients.user_id = %s
+          AND co.user_id = %s
         """,
-        update_params,
+        (user_id, user_id),
     )
     updated_rows = cur.rowcount
-    logger.debug(f"[ONBOARDING] UPDATE clients affected {updated_rows} row(s)")
+    logger.debug(f"[ONBOARDING] UPDATE clients from client_onboarding affected {updated_rows} row(s)")
 
     # 5) Verify the update by selecting the row
     cur.execute(
