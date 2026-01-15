@@ -1,4 +1,5 @@
 # app/api/onboarding.py
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from psycopg2.extras import Json
 
@@ -6,6 +7,7 @@ from app.core.database import get_db
 from app.schemas.onboarding import OnboardingRequest
 from app.core.security import require_role
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/client", tags=["client"])
 
 @router.post("/onboarding")
@@ -14,7 +16,20 @@ def save_onboarding(
     db=Depends(get_db),
     current_user=Depends(require_role("client"))
 ):
+    """
+    Save onboarding data and update clients table.
+    
+    Test flow:
+    1. Submit onboarding POST /client/onboarding with weight_kg, height_cm, gender, your_goal
+    2. Check clients table: SELECT * FROM clients WHERE user_id = <user_id>
+       - Should have onboarding_done=true, weight_kg, height_cm, gender, goal_type populated
+    3. Call GET /client/daily-targets - should return 200 with computed targets
+    """
+    user_id = current_user["id"]
     cur = db.cursor()
+    
+    # Debug: Log user_id and request values
+    logger.debug(f"[ONBOARDING] user_id={user_id}, weight_kg={req.weight_kg}, height_cm={req.height_cm}, gender={req.gender}, your_goal={req.your_goal}")
 
     # 1) Onboarding verisini kaydet / güncelle
     cur.execute(
@@ -124,19 +139,57 @@ def save_onboarding(
         VALUES (%s, FALSE, NOW())
         ON CONFLICT (user_id) DO NOTHING
         """,
-        (current_user["id"],),
+        (user_id,),
     )
 
-    # 3) onboarding flag'i TRUE yap
+    # 3) Validate required fields before updating clients table
+    if req.weight_kg is None or req.height_cm is None:
+        logger.warning(f"[ONBOARDING] Missing required measurements for user_id={user_id}: weight_kg={req.weight_kg}, height_cm={req.height_cm}")
+        # Still allow onboarding to complete, but log warning
+        # The daily-targets endpoint will catch this and return 400
+
+    # 4) Update clients table with profile data and set onboarding_done = TRUE
+    # Map your_goal -> goal_type for clients table
+    update_params = {
+        "user_id": user_id,
+        "weight_kg": req.weight_kg,
+        "height_cm": req.height_cm,
+        "gender": req.gender,
+        "goal_type": req.your_goal,  # Map your_goal to goal_type
+    }
+    
+    logger.debug(f"[ONBOARDING] Updating clients table with params: {update_params}")
+    
     cur.execute(
         """
         UPDATE clients
-        SET onboarding_done = TRUE
-        WHERE user_id = %s
+        SET 
+            onboarding_done = TRUE,
+            weight_kg = %(weight_kg)s,
+            height_cm = %(height_cm)s,
+            gender = %(gender)s,
+            goal_type = %(goal_type)s
+        WHERE user_id = %(user_id)s
         """,
-        (current_user["id"],),
+        update_params,
     )
     updated_rows = cur.rowcount
+    logger.debug(f"[ONBOARDING] UPDATE clients affected {updated_rows} row(s)")
+
+    # 5) Verify the update by selecting the row
+    cur.execute(
+        """
+        SELECT weight_kg, height_cm, gender, goal_type, onboarding_done
+        FROM clients
+        WHERE user_id = %s
+        """,
+        (user_id,),
+    )
+    verification_row = cur.fetchone()
+    if verification_row:
+        logger.debug(f"[ONBOARDING] Verification - clients row after update: {dict(verification_row)}")
+    else:
+        logger.error(f"[ONBOARDING] ERROR: Could not find clients row for user_id={user_id} after update!")
 
     db.commit()
 
