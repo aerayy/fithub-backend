@@ -203,14 +203,18 @@ def get_daily_targets(
             )
         
         # Check if required measurements exist
-        weight_kg = client_row["weight_kg"]
-        height_cm = client_row["height_cm"]
+        weight_kg_raw = client_row["weight_kg"]
+        height_cm_raw = client_row["height_cm"]
         
-        if weight_kg is None or height_cm is None:
+        if weight_kg_raw is None or height_cm_raw is None:
             raise HTTPException(
                 status_code=400,
                 detail="Missing client measurements"
             )
+        
+        # Cast Decimal to float (PostgreSQL numeric returns Decimal, but formulas use floats)
+        w = float(weight_kg_raw)
+        h = float(height_cm_raw)
         
         # Get other fields (may be None)
         gender = client_row["gender"]
@@ -219,9 +223,9 @@ def get_daily_targets(
         # Normalize gender
         normalized_gender = normalize_gender(gender)
         
-        # Calculate targets
-        water_liters = calculate_water_liters(weight_kg)
-        kcal_goal = calculate_kcal_goal(weight_kg, height_cm, normalized_gender, goal_type)
+        # Calculate targets using float values
+        water_liters = calculate_water_liters(w)
+        kcal_goal = calculate_kcal_goal(w, h, normalized_gender, goal_type)
         step_goal = calculate_step_goal(goal_type)
         
         return {
