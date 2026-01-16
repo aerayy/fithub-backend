@@ -6,6 +6,6 @@ python-jose
 python-multipart
 email-validator
 python-dotenv
-openai==1.0.0
+openai>=1.12.0
 
 
