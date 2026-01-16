@@ -385,10 +385,8 @@ def generate_workout_program(
         SELECT 
             co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
             co.experience, co.how_fit, co.knee_pain, co.body_part_focus,
-            co.pref_workout_length, co.workout_place,
-            c.full_name
+            co.pref_workout_length, co.workout_place
         FROM client_onboarding co
-        LEFT JOIN clients c ON c.user_id = co.user_id
         WHERE co.user_id = %s
         """,
         (student_user_id,),
