@@ -29,3 +29,8 @@ try:
     from . import daily_targets  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import workouts  # noqa: F401
+except Exception:
+    pass

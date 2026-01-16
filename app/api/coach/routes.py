@@ -187,6 +187,64 @@ def get_active_programs(
 # --------------------------------------------------
 # WORKOUT PROGRAM SAVE
 # --------------------------------------------------
+def _flatten_day_to_exercises(day_data: dict) -> list:
+    """
+    Flatten a day payload (new format) into a list of exercise dicts for workout_exercises table.
+    Handles warmup items and block items (including supersets).
+    Returns list of {name, sets, reps, notes} dicts in order.
+    """
+    exercises = []
+    
+    # Warmup items first
+    warmup = day_data.get("warmup", {}) or {}
+    warmup_items = warmup.get("items", []) or []
+    for item in warmup_items:
+        if isinstance(item, dict):
+            exercises.append({
+                "name": item.get("name") or "",
+                "sets": item.get("sets"),
+                "reps": item.get("reps") or "",
+                "notes": item.get("notes") or "",
+            })
+    
+    # Block items
+    blocks = day_data.get("blocks", []) or []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        block_items = block.get("items", []) or []
+        for item in block_items:
+            if not isinstance(item, dict):
+                continue
+            
+            item_type = item.get("type", "exercise")
+            
+            if item_type == "exercise":
+                exercises.append({
+                    "name": item.get("name") or "",
+                    "sets": item.get("sets"),
+                    "reps": item.get("reps") or "",
+                    "notes": item.get("notes") or "",
+                })
+            elif item_type == "superset":
+                # Flatten superset items
+                superset_items = item.get("items", []) or []
+                for ss_item in superset_items:
+                    if isinstance(ss_item, dict):
+                        notes = ss_item.get("notes") or ""
+                        # Optionally prefix with [SUPERSET] if notes exist
+                        if notes:
+                            notes = f"[SUPERSET] {notes}"
+                        exercises.append({
+                            "name": ss_item.get("name") or "",
+                            "sets": ss_item.get("sets"),
+                            "reps": ss_item.get("reps") or "",
+                            "notes": notes,
+                        })
+    
+    return exercises
+
+
 @router.post("/students/{student_user_id}/workout-programs")
 def save_workout_program(
     student_user_id: int,
@@ -195,7 +253,7 @@ def save_workout_program(
     current_user=Depends(require_role("coach")),
 ):
     coach_id = current_user["id"]
-    cur = db.cursor()
+    cur = db.cursor(cursor_factory=RealDictCursor)
 
     cur.execute(
         "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
@@ -204,59 +262,160 @@ def save_workout_program(
     if not cur.fetchone():
         raise HTTPException(status_code=403, detail="Student not assigned to this coach")
 
+    try:
+        # Create program as DRAFT (is_active=false)
+        # Do NOT deactivate existing active program - that happens only on "Assign Program"
+        cur.execute(
+            """
+            INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
+            VALUES (%s, %s, %s, FALSE)
+            RETURNING id
+            """,
+            (student_user_id, coach_id, "Coach Workout Program"),
+        )
+        program_id = _fetchone_id(cur.fetchone())
+
+        week = payload.get("week", {}) or {}
+        day_order = 1
+
+        for day_key, day_value in week.items():
+            if not day_value:
+                continue
+
+            # Detect format: old (array) vs new (object)
+            is_old_format = isinstance(day_value, list)
+            is_new_format = isinstance(day_value, dict)
+
+            if not (is_old_format or is_new_format):
+                continue
+
+            # Prepare day_payload and exercises list
+            day_payload_json = None
+            exercises_to_insert = []
+
+            if is_new_format:
+                # New format: save day_payload JSONB
+                day_payload_json = json.dumps(day_value)
+                # Flatten to exercises for compatibility
+                exercises_to_insert = _flatten_day_to_exercises(day_value)
+            else:
+                # Old format: array of exercises
+                exercises_to_insert = day_value
+                # Optionally generate minimal day_payload for backward compatibility
+                # (We'll leave it NULL to maintain old behavior)
+
+            # Insert workout_day
+            cur.execute(
+                """
+                INSERT INTO workout_days (workout_program_id, day_of_week, order_index, day_payload)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                (program_id, day_key, day_order, day_payload_json),
+            )
+            workout_day_id = _fetchone_id(cur.fetchone())
+
+            # Insert exercises (for both old and new format)
+            for ex_order, ex in enumerate(exercises_to_insert, start=1):
+                if isinstance(ex, dict):
+                    cur.execute(
+                        """
+                        INSERT INTO workout_exercises
+                        (workout_day_id, exercise_name, sets, reps, notes, order_index)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            workout_day_id,
+                            ex.get("name") or "",
+                            ex.get("sets"),
+                            ex.get("reps") or "",
+                            ex.get("notes") or "",
+                            ex_order,
+                        ),
+                    )
+
+            day_order += 1
+
+        db.commit()
+        return {"ok": True, "program_id": program_id}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error saving workout program: {str(e)}")
+
+
+@router.post("/students/{student_user_id}/workout-programs/{program_id}/assign")
+def assign_workout_program(
+    student_user_id: int,
+    program_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Assign (activate) a workout program for a student.
+    This endpoint:
+    1. Deactivates all currently active programs for the student
+    2. Activates the specified program
+    
+    The program must belong to this coach and be for this student.
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
     cur.execute(
-        "UPDATE workout_programs SET is_active=FALSE WHERE client_user_id=%s AND is_active=TRUE",
-        (student_user_id,),
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
     )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
 
-    cur.execute(
-        """
-        INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
-        VALUES (%s, %s, %s, TRUE)
-        RETURNING id
-        """,
-        (student_user_id, coach_id, "Coach Workout Program"),
-    )
-    program_id = _fetchone_id(cur.fetchone())
+    try:
+        # Verify program exists, belongs to this coach, and is for this student
+        cur.execute(
+            """
+            SELECT id, client_user_id, coach_user_id, is_active
+            FROM workout_programs
+            WHERE id = %s AND client_user_id = %s AND coach_user_id = %s
+            """,
+            (program_id, student_user_id, coach_id),
+        )
+        program = cur.fetchone()
+        
+        if not program:
+            raise HTTPException(
+                status_code=404,
+                detail="Workout program not found or you don't have permission to assign it"
+            )
 
-    week = payload.get("week", {}) or {}
-    day_order = 1
-
-    for day_key, exercises in week.items():
-        if not exercises:
-            continue
+        # Transaction: deactivate all active programs for this student, then activate the specified one
+        cur.execute(
+            """
+            UPDATE workout_programs
+            SET is_active = FALSE, updated_at = NOW()
+            WHERE client_user_id = %s AND is_active = TRUE
+            """,
+            (student_user_id,),
+        )
 
         cur.execute(
             """
-            INSERT INTO workout_days (workout_program_id, day_of_week, order_index)
-            VALUES (%s, %s, %s)
-            RETURNING id
+            UPDATE workout_programs
+            SET is_active = TRUE, updated_at = NOW()
+            WHERE id = %s
             """,
-            (program_id, day_key, day_order),
+            (program_id,),
         )
-        workout_day_id = _fetchone_id(cur.fetchone())
 
-        for ex_order, ex in enumerate(exercises, start=1):
-            cur.execute(
-                """
-                INSERT INTO workout_exercises
-                (workout_day_id, exercise_name, sets, reps, notes, order_index)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    workout_day_id,
-                    ex.get("name"),
-                    ex.get("sets"),
-                    ex.get("reps"),
-                    ex.get("notes"),
-                    ex_order,
-                ),
-            )
+        db.commit()
+        return {"ok": True, "active_program_id": program_id}
 
-        day_order += 1
-
-    db.commit()
-    return {"ok": True, "program_id": program_id}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error assigning workout program: {str(e)}")
 
 
 # --------------------------------------------------
