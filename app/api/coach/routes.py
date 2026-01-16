@@ -415,14 +415,16 @@ def generate_workout_program(
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Fetch client onboarding data (full_name from client_onboarding if needed)
+    # Fetch client onboarding data and user email (for full_name fallback)
     cur.execute(
         """
         SELECT 
             co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
             co.experience, co.how_fit, co.knee_pain, co.body_part_focus,
-            co.pref_workout_length, co.workout_place, co.full_name
+            co.pref_workout_length, co.workout_place, co.full_name,
+            u.email
         FROM client_onboarding co
+        JOIN users u ON u.id = co.user_id
         WHERE co.user_id = %s
         """,
         (student_user_id,),
@@ -456,6 +458,8 @@ def generate_workout_program(
         body_focus = client_data.get("body_part_focus")
         workout_length = client_data.get("pref_workout_length") or "45-60 minutes"
         workout_place = client_data.get("workout_place")
+        # Use full_name from client_onboarding, fallback to email
+        client_name = client_data.get("full_name") or client_data.get("email") or ""
 
         # Safety note for knee pain
         safety_note = ""
@@ -470,7 +474,7 @@ def generate_workout_program(
             else:
                 focus_desc = f" Focus areas: {body_focus}."
 
-        prompt = f"""Generate a personalized workout program for a {age}-year-old {gender} client.
+        prompt = f"""Generate a personalized workout program for a {age}-year-old {gender} client{f' named {client_name}' if client_name else ''}.
 
 Client Profile:
 - Weight: {weight} kg
@@ -543,16 +547,50 @@ Return ONLY the JSON object, nothing else."""
                                 "notes": str(ex.get("notes", "")),
                             })
 
-        # Save to DB as draft
+        # Find or create draft program (overwrite existing draft)
         cur.execute(
             """
-            INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
-            VALUES (%s, %s, %s, FALSE)
-            RETURNING id
+            SELECT id FROM workout_programs
+            WHERE client_user_id = %s AND coach_user_id = %s AND is_active = FALSE
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
             """,
-            (student_user_id, coach_id, "AI Workout Program"),
+            (student_user_id, coach_id),
         )
-        program_id = _fetchone_id(cur.fetchone())
+        existing_program = cur.fetchone()
+        
+        if existing_program:
+            # Reuse existing draft program
+            program_id = existing_program["id"]
+            
+            # Delete existing exercises and days
+            cur.execute(
+                """
+                DELETE FROM workout_exercises
+                WHERE workout_day_id IN (
+                    SELECT id FROM workout_days WHERE workout_program_id = %s
+                )
+                """,
+                (program_id,),
+            )
+            
+            cur.execute(
+                """
+                DELETE FROM workout_days WHERE workout_program_id = %s
+                """,
+                (program_id,),
+            )
+        else:
+            # Create new draft program
+            cur.execute(
+                """
+                INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
+                VALUES (%s, %s, %s, FALSE)
+                RETURNING id
+                """,
+                (student_user_id, coach_id, "AI Workout Program"),
+            )
+            program_id = _fetchone_id(cur.fetchone())
 
         # Insert all 7 days (even if empty) with day_payload
         day_order = 1
@@ -601,12 +639,16 @@ Return ONLY the JSON object, nothing else."""
             # Insert exercises (only if day has exercises)
             if exercises:
                 for ex_order, ex in enumerate(exercises, start=1):
-                    # Normalize reps for DB (convert to int or None)
+                    # Reps is TEXT column - keep as string, don't normalize to int
                     reps_raw = ex.get("reps", "")
-                    reps_db = _normalize_reps(reps_raw)
+                    reps_db = str(reps_raw) if reps_raw else ""
                     
-                    # Normalize sets
-                    sets_db = int(ex.get("sets", 3)) if ex.get("sets") else 3
+                    # Sets is INT column - ensure it's an integer
+                    sets_raw = ex.get("sets", 3)
+                    try:
+                        sets_db = int(sets_raw) if sets_raw else 3
+                    except (ValueError, TypeError):
+                        sets_db = 3
                     
                     cur.execute(
                         """
@@ -616,10 +658,10 @@ Return ONLY the JSON object, nothing else."""
                         """,
                         (
                             workout_day_id,
-                            ex.get("name") or "",
+                            str(ex.get("name", "")),
                             sets_db,
                             reps_db,
-                            ex.get("notes") or "",
+                            str(ex.get("notes", "")),
                             ex_order,
                         ),
                     )
@@ -633,8 +675,9 @@ Return ONLY the JSON object, nothing else."""
         logger.info(f"AI workout draft created: program_id={program_id} student_id={student_user_id} coach_id={coach_id}")
         
         return {
-            "week": week,
-            "generated_by": "ai"
+            "program_id": program_id,
+            "generated_by": "ai",
+            "week": week
         }
 
     except json.JSONDecodeError as e:
