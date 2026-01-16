@@ -17,3 +17,5 @@ DB_PORT = int(os.getenv("DB_PORT", "5433"))
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+print("OPENAI_API_KEY loaded:", bool(OPENAI_API_KEY))

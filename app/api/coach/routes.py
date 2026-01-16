@@ -3,11 +3,13 @@ from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 import json
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg2.extras import RealDictCursor
 import psycopg2
 from app.core.database import get_db
 from app.core.security import require_role
+from app.core.config import OPENAI_API_KEY
 from app.api.coach.students import router as students_router
 
 
@@ -342,6 +344,226 @@ def save_workout_program(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error saving workout program: {str(e)}")
+
+
+@router.post("/students/{student_user_id}/workout-programs/generate")
+def generate_workout_program(
+    student_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Generate a workout program using AI for a student.
+    Creates a draft program (is_active=false) that can be assigned later.
+    
+    Example curl:
+    curl -X POST "http://localhost:8000/coach/students/36/workout-programs/generate" \
+      -H "Authorization: Bearer <coach_token>"
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    # Check if student exists
+    cur.execute(
+        "SELECT id FROM users WHERE id=%s",
+        (student_user_id,),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Fetch client onboarding data
+    cur.execute(
+        """
+        SELECT 
+            co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
+            co.experience, co.how_fit, co.knee_pain, co.body_part_focus,
+            co.pref_workout_length, co.workout_place,
+            c.full_name
+        FROM client_onboarding co
+        LEFT JOIN clients c ON c.user_id = co.user_id
+        WHERE co.user_id = %s
+        """,
+        (student_user_id,),
+    )
+    client_data = cur.fetchone()
+
+    if not client_data:
+        raise HTTPException(status_code=404, detail="Client onboarding data not found")
+
+    # Check OpenAI API key
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Build prompt for AI
+        age = client_data.get("age") or "unknown"
+        weight = client_data.get("weight_kg") or "unknown"
+        height = client_data.get("height_cm") or "unknown"
+        gender = client_data.get("gender") or "unknown"
+        goal = client_data.get("your_goal") or "general fitness"
+        experience = client_data.get("experience") or "beginner"
+        fitness_level = client_data.get("how_fit") or "beginner"
+        knee_pain = client_data.get("knee_pain")
+        body_focus = client_data.get("body_part_focus")
+        workout_length = client_data.get("pref_workout_length") or "45-60 minutes"
+        workout_place = client_data.get("workout_place")
+
+        # Safety note for knee pain
+        safety_note = ""
+        if knee_pain:
+            safety_note = " IMPORTANT: The client has knee pain. Avoid heavy knee-dominant exercises like deep squats, lunges, and leg presses. Focus on upper body, core, and low-impact lower body exercises."
+
+        # Build body focus description
+        focus_desc = ""
+        if body_focus:
+            if isinstance(body_focus, dict):
+                focus_desc = f" Focus areas: {', '.join(body_focus.values()) if isinstance(body_focus, dict) else str(body_focus)}."
+            else:
+                focus_desc = f" Focus areas: {body_focus}."
+
+        prompt = f"""Generate a personalized workout program for a {age}-year-old {gender} client.
+
+Client Profile:
+- Weight: {weight} kg
+- Height: {height} cm
+- Goal: {goal}
+- Experience level: {experience}
+- Current fitness level: {fitness_level}
+- Preferred workout length: {workout_length}
+- Workout place: {workout_place if workout_place else 'gym'}
+{safety_note}
+{focus_desc}
+
+Generate a weekly workout program in JSON format. Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+{{
+  "mon": [{{"name": "Exercise Name", "sets": 3, "reps": "8-10", "notes": "RPE 7"}}],
+  "tue": [],
+  "wed": [],
+  "thu": [],
+  "fri": [],
+  "sat": [],
+  "sun": []
+}}
+
+Rules:
+- Each exercise must have: name (string), sets (integer), reps (string like "8-10" or "12"), notes (string)
+- Only include days with exercises (empty arrays for rest days)
+- Beginner-safe exercises only
+- If knee pain is mentioned, avoid knee-dominant movements
+- Focus on compound movements
+- Progressive overload appropriate for {experience} level
+- Total 3-5 workout days per week
+- Each workout should be {workout_length}
+
+Return ONLY the JSON object, nothing else."""
+
+        # Call OpenAI
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a professional fitness coach. Generate safe, effective workout programs in JSON format only."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+        )
+
+        # Parse response
+        week_json_str = response.choices[0].message.content
+        week_data = json.loads(week_json_str)
+
+        # Validate structure
+        week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        week = {day: [] for day in week_days}
+        
+        for day_key in week_days:
+            if day_key in week_data:
+                day_exercises = week_data[day_key]
+                if isinstance(day_exercises, list):
+                    # Validate and normalize exercises
+                    for ex in day_exercises:
+                        if isinstance(ex, dict):
+                            week[day_key].append({
+                                "name": str(ex.get("name", "")),
+                                "sets": int(ex.get("sets", 3)) if ex.get("sets") else 3,
+                                "reps": str(ex.get("reps", "8-10")),
+                                "notes": str(ex.get("notes", "")),
+                            })
+
+        # Save to DB as draft
+        cur.execute(
+            """
+            INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
+            VALUES (%s, %s, %s, FALSE)
+            RETURNING id
+            """,
+            (student_user_id, coach_id, "AI Workout Program (Draft)"),
+        )
+        program_id = _fetchone_id(cur.fetchone())
+
+        day_order = 1
+        for day_key, exercises in week.items():
+            if not exercises:  # Skip empty days
+                continue
+
+            # Insert workout_day
+            cur.execute(
+                """
+                INSERT INTO workout_days (workout_program_id, day_of_week, order_index)
+                VALUES (%s, %s, %s)
+                RETURNING id
+                """,
+                (program_id, day_key, day_order),
+            )
+            workout_day_id = _fetchone_id(cur.fetchone())
+
+            # Insert exercises
+            for ex_order, ex in enumerate(exercises, start=1):
+                cur.execute(
+                    """
+                    INSERT INTO workout_exercises
+                    (workout_day_id, exercise_name, sets, reps, notes, order_index)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        workout_day_id,
+                        ex.get("name") or "",
+                        ex.get("sets"),
+                        ex.get("reps") or "",
+                        ex.get("notes") or "",
+                        ex_order,
+                    ),
+                )
+
+            day_order += 1
+
+        db.commit()
+        return {
+            "program_id": program_id,
+            "generated_by": "ai",
+            "week": week
+        }
+
+    except json.JSONDecodeError as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Invalid AI response format: {str(e)}")
+    except ImportError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="OpenAI library not installed")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error generating workout program: {str(e)}")
 
 
 @router.get("/students/{student_user_id}/workout-programs/latest")
