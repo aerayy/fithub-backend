@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 import json
 import os
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg2.extras import RealDictCursor
 import psycopg2
@@ -346,6 +347,41 @@ def save_workout_program(
         raise HTTPException(status_code=500, detail=f"Error saving workout program: {str(e)}")
 
 
+def _normalize_reps(reps_value):
+    """
+    Normalize reps value for DB insert.
+    Converts "8-10" -> 10, "8–10" (en-dash) -> 10, "AMRAP" -> None, "12" -> 12.
+    Returns integer or None.
+    """
+    if reps_value is None:
+        return None
+    
+    reps_str = str(reps_value).strip().upper()
+    
+    # Handle AMRAP, "to failure", etc.
+    if any(keyword in reps_str for keyword in ["AMRAP", "FAILURE", "MAX", "AS MANY"]):
+        return None
+    
+    # Handle range: "8-10" or "8–10" (en-dash)
+    if "-" in reps_str or "–" in reps_str or "—" in reps_str:
+        # Replace en-dash and em-dash with regular dash
+        reps_str = reps_str.replace("–", "-").replace("—", "-")
+        parts = reps_str.split("-")
+        if len(parts) == 2:
+            try:
+                # Take the max value from range
+                max_val = max(int(parts[0].strip()), int(parts[1].strip()))
+                return max_val
+            except (ValueError, IndexError):
+                return None
+    
+    # Try to parse as integer
+    try:
+        return int(reps_str)
+    except ValueError:
+        return None
+
+
 @router.post("/students/{student_user_id}/workout-programs/generate")
 def generate_workout_program(
     student_user_id: int,
@@ -379,13 +415,13 @@ def generate_workout_program(
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Fetch client onboarding data
+    # Fetch client onboarding data (full_name from client_onboarding if needed)
     cur.execute(
         """
         SELECT 
             co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
             co.experience, co.how_fit, co.knee_pain, co.body_part_focus,
-            co.pref_workout_length, co.workout_place
+            co.pref_workout_length, co.workout_place, co.full_name
         FROM client_onboarding co
         WHERE co.user_id = %s
         """,
@@ -402,6 +438,10 @@ def generate_workout_program(
 
     try:
         from openai import OpenAI
+    except ImportError:
+        raise HTTPException(status_code=500, detail="OpenAI library not installed. Please install openai package.")
+    
+    try:
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         # Build prompt for AI
@@ -481,7 +521,7 @@ Return ONLY the JSON object, nothing else."""
         week_json_str = response.choices[0].message.content
         week_data = json.loads(week_json_str)
 
-        # Validate structure
+        # Validate structure and normalize
         week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
         week = {day: [] for day in week_days}
         
@@ -492,10 +532,14 @@ Return ONLY the JSON object, nothing else."""
                     # Validate and normalize exercises
                     for ex in day_exercises:
                         if isinstance(ex, dict):
+                            # Normalize reps for response (keep as string for display)
+                            reps_raw = ex.get("reps", "8-10")
+                            reps_str = str(reps_raw) if reps_raw else "8-10"
+                            
                             week[day_key].append({
                                 "name": str(ex.get("name", "")),
                                 "sets": int(ex.get("sets", 3)) if ex.get("sets") else 3,
-                                "reps": str(ex.get("reps", "8-10")),
+                                "reps": reps_str,
                                 "notes": str(ex.get("notes", "")),
                             })
 
@@ -506,51 +550,91 @@ Return ONLY the JSON object, nothing else."""
             VALUES (%s, %s, %s, FALSE)
             RETURNING id
             """,
-            (student_user_id, coach_id, "AI Workout Program (Draft)"),
+            (student_user_id, coach_id, "AI Workout Program"),
         )
         program_id = _fetchone_id(cur.fetchone())
 
+        # Insert all 7 days (even if empty) with day_payload
         day_order = 1
-        for day_key, exercises in week.items():
-            if not exercises:  # Skip empty days
-                continue
-
-            # Insert workout_day
+        for day_key in week_days:
+            exercises = week.get(day_key, [])
+            
+            # Build day_payload structure
+            day_payload = None
+            if exercises:
+                day_payload = {
+                    "title": "",
+                    "kcal": "",
+                    "coach_note": "",
+                    "warmup": {
+                        "duration_min": "",
+                        "items": []
+                    },
+                    "blocks": [
+                        {
+                            "title": "Workout Block",
+                            "items": [
+                                {
+                                    "type": "exercise",
+                                    "name": ex.get("name", ""),
+                                    "sets": ex.get("sets"),
+                                    "reps": str(ex.get("reps", "")),
+                                    "notes": ex.get("notes", ""),
+                                }
+                                for ex in exercises
+                            ]
+                        }
+                    ]
+                }
+            
+            # Insert workout_day (always insert, even if empty)
             cur.execute(
                 """
-                INSERT INTO workout_days (workout_program_id, day_of_week, order_index)
-                VALUES (%s, %s, %s)
+                INSERT INTO workout_days (workout_program_id, day_of_week, order_index, day_payload)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id
                 """,
-                (program_id, day_key, day_order),
+                (program_id, day_key, day_order, json.dumps(day_payload) if day_payload else None),
             )
             workout_day_id = _fetchone_id(cur.fetchone())
 
-            # Insert exercises
-            for ex_order, ex in enumerate(exercises, start=1):
-                cur.execute(
-                    """
-                    INSERT INTO workout_exercises
-                    (workout_day_id, exercise_name, sets, reps, notes, order_index)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        workout_day_id,
-                        ex.get("name") or "",
-                        ex.get("sets"),
-                        ex.get("reps") or "",
-                        ex.get("notes") or "",
-                        ex_order,
-                    ),
-                )
+            # Insert exercises (only if day has exercises)
+            if exercises:
+                for ex_order, ex in enumerate(exercises, start=1):
+                    # Normalize reps for DB (convert to int or None)
+                    reps_raw = ex.get("reps", "")
+                    reps_db = _normalize_reps(reps_raw)
+                    
+                    # Normalize sets
+                    sets_db = int(ex.get("sets", 3)) if ex.get("sets") else 3
+                    
+                    cur.execute(
+                        """
+                        INSERT INTO workout_exercises
+                        (workout_day_id, exercise_name, sets, reps, notes, order_index)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            workout_day_id,
+                            ex.get("name") or "",
+                            sets_db,
+                            reps_db,
+                            ex.get("notes") or "",
+                            ex_order,
+                        ),
+                    )
 
             day_order += 1
 
         db.commit()
+        
+        # Log success
+        logger = logging.getLogger(__name__)
+        logger.info(f"AI workout draft created: program_id={program_id} student_id={student_user_id} coach_id={coach_id}")
+        
         return {
-            "program_id": program_id,
-            "generated_by": "ai",
-            "week": week
+            "week": week,
+            "generated_by": "ai"
         }
 
     except json.JSONDecodeError as e:
@@ -558,9 +642,11 @@ Return ONLY the JSON object, nothing else."""
         raise HTTPException(status_code=500, detail=f"Invalid AI response format: {str(e)}")
     except ImportError:
         db.rollback()
-        raise HTTPException(status_code=500, detail="OpenAI library not installed")
+        raise HTTPException(status_code=500, detail="OpenAI library not installed. Please install openai package.")
     except Exception as e:
         db.rollback()
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error generating workout program for student_id={student_user_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generating workout program: {str(e)}")
 
 
