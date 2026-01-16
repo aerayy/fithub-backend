@@ -11,7 +11,7 @@ from app.api.admin import router as admin_router
 from app.api.coach.routes import router as coach_router
 from app.api.client.routes import router as client_router
 from app.api.subscriptions import router as subscriptions_router
-
+import os
 
 app = FastAPI()
 
