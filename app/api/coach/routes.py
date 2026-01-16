@@ -344,6 +344,192 @@ def save_workout_program(
         raise HTTPException(status_code=500, detail=f"Error saving workout program: {str(e)}")
 
 
+@router.get("/students/{student_user_id}/workout-programs/latest")
+def get_latest_workout_program(
+    student_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Get the latest saved workout program for a student (even if draft/not active).
+    Returns UI-friendly flat structure for admin panel editor.
+    
+    Example curl:
+    curl -X GET "http://localhost:8000/coach/students/36/workout-programs/latest" \
+      -H "Authorization: Bearer <coach_token>"
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    # Get latest program (by created_at DESC, then id DESC)
+    cur.execute(
+        """
+        SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at
+        FROM workout_programs
+        WHERE client_user_id = %s AND coach_user_id = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (student_user_id, coach_id),
+    )
+    program = cur.fetchone()
+
+    if not program:
+        raise HTTPException(status_code=404, detail="Workout program not found")
+
+    program_id = program["id"]
+    is_active = bool(program["is_active"])
+
+    # Get all days for this program
+    cur.execute(
+        """
+        SELECT id, workout_program_id, day_of_week, order_index
+        FROM workout_days
+        WHERE workout_program_id = %s
+        ORDER BY order_index ASC, id ASC
+        """,
+        (program_id,),
+    )
+    days = cur.fetchall() or []
+
+    # Get all exercises grouped by workout_day_id
+    day_ids = [d["id"] for d in days]
+    exercises_by_day_id = {}
+    
+    if day_ids:
+        placeholders = ",".join(["%s"] * len(day_ids))
+        cur.execute(
+            f"""
+            SELECT id, workout_day_id, exercise_name, sets, reps, notes, order_index
+            FROM workout_exercises
+            WHERE workout_day_id IN ({placeholders})
+            ORDER BY workout_day_id ASC, order_index ASC, id ASC
+            """,
+            tuple(day_ids),
+        )
+        all_exercises = cur.fetchall() or []
+        
+        for ex in all_exercises:
+            day_id = ex["workout_day_id"]
+            if day_id not in exercises_by_day_id:
+                exercises_by_day_id[day_id] = []
+            exercises_by_day_id[day_id].append(ex)
+
+    # Build week structure: {mon: [], tue: [], ...}
+    week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    week = {day: [] for day in week_days}
+
+    # Map days to week structure
+    for day in days:
+        day_key = day["day_of_week"]
+        if day_key not in week_days:
+            continue
+        
+        day_id = day["id"]
+        exercises = exercises_by_day_id.get(day_id, [])
+        
+        # Convert exercises to flat format: {name, sets, reps, notes}
+        week[day_key] = [
+            {
+                "name": ex.get("exercise_name") or "",
+                "sets": ex.get("sets"),
+                "reps": ex.get("reps") or "",
+                "notes": ex.get("notes") or "",
+            }
+            for ex in exercises
+        ]
+
+    return {
+        "program_id": program_id,
+        "is_active": is_active,
+        "week": week
+    }
+
+
+@router.post("/students/{student_user_id}/workout-programs/assign")
+def assign_latest_workout_program(
+    student_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Assign (activate) the latest workout program for a student.
+    Reuses existing "set active" mechanism from assign_workout_program endpoint.
+    
+    Example curl:
+    curl -X POST "http://localhost:8000/coach/students/36/workout-programs/assign" \
+      -H "Authorization: Bearer <coach_token>"
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    try:
+        # Find latest program for this student
+        cur.execute(
+            """
+            SELECT id, client_user_id, coach_user_id, is_active
+            FROM workout_programs
+            WHERE client_user_id = %s AND coach_user_id = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (student_user_id, coach_id),
+        )
+        program = cur.fetchone()
+
+        if not program:
+            raise HTTPException(status_code=404, detail="Workout program not found")
+
+        program_id = program["id"]
+
+        # Reuse existing "set active" logic from assign_workout_program endpoint
+        # 1. Deactivate all active programs for this student
+        cur.execute(
+            """
+            UPDATE workout_programs
+            SET is_active = FALSE, updated_at = NOW()
+            WHERE client_user_id = %s AND is_active = TRUE
+            """,
+            (student_user_id,),
+        )
+
+        # 2. Activate the latest program
+        cur.execute(
+            """
+            UPDATE workout_programs
+            SET is_active = TRUE, updated_at = NOW()
+            WHERE id = %s
+            """,
+            (program_id,),
+        )
+
+        db.commit()
+        return {"ok": True, "program_id": program_id}
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error assigning workout program: {str(e)}")
+
+
 @router.post("/students/{student_user_id}/workout-programs/{program_id}/assign")
 def assign_workout_program(
     student_user_id: int,
