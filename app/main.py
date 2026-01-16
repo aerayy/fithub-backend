@@ -16,27 +16,20 @@ import os
 app = FastAPI()
 
 # ✅ DEV MODE: Her origin'e izin ver (cookie yok -> allow_credentials=False şart)
-import re
+import os
+from fastapi.middleware.cors import CORSMiddleware
 
 cors_origins = os.getenv("CORS_ORIGINS", "")
-origins = []
-
-for origin in cors_origins.split(","):
-    origin = origin.strip()
-    if origin == "*" or origin == "http://localhost:*":
-        # Development: Allow all localhost ports
-        origins.append(re.compile(r"http://localhost:\d+"))
-        origins.append(re.compile(r"http://127\.0\.0\.1:\d+"))
-    else:
-        origins.append(origin)
+origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+",  # Regex kullan
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Routers
 app.include_router(health_router)
