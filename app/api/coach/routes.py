@@ -868,6 +868,25 @@ def assign_latest_workout_program(
             (program_id,),
         )
 
+        # 3. Update program_assigned_at in subscriptions table (latest active/pending subscription)
+        cur.execute(
+            """
+            UPDATE subscriptions
+            SET program_assigned_at = NOW()
+            WHERE id = (
+                SELECT id
+                FROM subscriptions
+                WHERE client_user_id = %s
+                  AND coach_user_id = %s
+                  AND status IN ('pending', 'active')
+                  AND (ends_at IS NULL OR ends_at > NOW())
+                ORDER BY purchased_at DESC
+                LIMIT 1
+            )
+            """,
+            (student_user_id, coach_id),
+        )
+
         db.commit()
         return {"ok": True, "program_id": program_id}
 
@@ -940,6 +959,25 @@ def assign_workout_program(
             WHERE id = %s
             """,
             (program_id,),
+        )
+
+        # Update program_assigned_at in subscriptions table (latest active/pending subscription)
+        cur.execute(
+            """
+            UPDATE subscriptions
+            SET program_assigned_at = NOW()
+            WHERE id = (
+                SELECT id
+                FROM subscriptions
+                WHERE client_user_id = %s
+                  AND coach_user_id = %s
+                  AND status IN ('pending', 'active')
+                  AND (ends_at IS NULL OR ends_at > NOW())
+                ORDER BY purchased_at DESC
+                LIMIT 1
+            )
+            """,
+            (student_user_id, coach_id),
         )
 
         db.commit()
