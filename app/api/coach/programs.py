@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg2.extras import RealDictCursor
 import json
-
+import re
 from app.core.database import get_db
 from app.core.security import require_role
 
@@ -9,11 +9,23 @@ router = APIRouter()
 
 
 def resolve_exercise_library_id(cur, name: str):
+    import re
+
+    def normalize_exercise_name(name: str) -> str:
+        name = name.lower().strip()
+        name = re.sub(r"[-_]", " ", name)
+        name = re.sub(r"\s+", " ", name)
+        name = name.replace("ups", "up")
+        name = name.replace("twists", "twist")
+        name = name.replace("flies", "fly")
+        return name
+
     if not name:
         return None
 
-    q = name.strip()
-    like = f"%{q}%"
+    normalized = normalize_exercise_name(name)
+    like = f"%{normalized}%"
+
 
     cur.execute(
         """
