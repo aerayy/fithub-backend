@@ -7,45 +7,66 @@ from app.core.security import require_role
 
 router = APIRouter()
 
+def normalize_name(s: str) -> str:
+    s = (s or "").lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "", s)   # boşluk, tire, parantez vs hepsi gider
+    return s
 
 def resolve_exercise_library_id(cur, name: str):
     if not name:
         return None
 
-    q = name.lower().strip()
+    raw = name.strip()
+    n = normalize_name(raw)
+    if not n:
+        return None
 
+    # 1) Önce direkt ILIKE ile hızlı dene (bazen tutar)
     cur.execute(
         """
-        WITH q AS (
-          SELECT regexp_replace(lower(%s), '[^a-z0-9]+', ' ', 'g') AS qnorm
-        )
-        SELECT el.id
-        FROM exercise_library el, q
-        WHERE
-          regexp_replace(lower(el.canonical_name), '[^a-z0-9]+', ' ', 'g') LIKE ('%' || q.qnorm || '%')
-          OR regexp_replace(lower(el.external_id), '[^a-z0-9]+', ' ', 'g') LIKE ('%' || q.qnorm || '%')
-          OR (
-            el.aliases IS NOT NULL AND EXISTS (
-              SELECT 1
-              FROM unnest(el.aliases) a
-              WHERE regexp_replace(lower(a), '[^a-z0-9]+', ' ', 'g') LIKE ('%' || q.qnorm || '%')
-            )
-          )
+        SELECT id
+        FROM exercise_library
+        WHERE canonical_name ILIKE %s
+           OR external_id ILIKE %s
+           OR (aliases IS NOT NULL AND EXISTS (
+                SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s
+           ))
         ORDER BY
-          CASE WHEN regexp_replace(lower(el.canonical_name), '[^a-z0-9]+', ' ', 'g') = q.qnorm THEN 0 ELSE 1 END,
-          el.canonical_name ASC
+          CASE WHEN canonical_name ILIKE %s THEN 0 ELSE 1 END,
+          canonical_name ASC
         LIMIT 1
         """,
-        (q,),
+        (f"%{raw}%", f"%{raw}%", f"%{raw}%", raw),
     )
+    row = cur.fetchone()
+    if row:
+        return row["id"] if isinstance(row, dict) else row[0]
 
+    # 2) Asıl çözüm: DB tarafında normalize edip compare et
+    cur.execute(
+        """
+        WITH q AS (SELECT %s::text AS qnorm)
+        SELECT id
+        FROM exercise_library, q
+        WHERE regexp_replace(lower(canonical_name), '[^a-z0-9]+', '', 'g')
+              LIKE ('%' || q.qnorm || '%')
+           OR regexp_replace(lower(external_id), '[^a-z0-9]+', '', 'g')
+              LIKE ('%' || q.qnorm || '%')
+           OR (aliases IS NOT NULL AND EXISTS (
+                SELECT 1
+                FROM unnest(aliases) a
+                WHERE regexp_replace(lower(a), '[^a-z0-9]+', '', 'g')
+                      LIKE ('%' || q.qnorm || '%')
+           ))
+        ORDER BY length(canonical_name) ASC
+        LIMIT 1
+        """,
+        (n,),
+    )
     row = cur.fetchone()
     if not row:
         return None
-
-    if isinstance(row, dict):
-        return row.get("id")
-    return row[0]
+    return row["id"] if isinstance(row, dict) else row[0]
 
 
 
