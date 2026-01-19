@@ -225,8 +225,11 @@ def save_workout_program(
         workout_day_id = _fetchone_id(cur.fetchone())
 
         for ex_order, ex in enumerate(exercises, start=1):
-            exercise_name = ex.get("name")
-            exercise_library_id = resolve_exercise_library_id(cur, exercise_name)
+            exercise_name = (ex.get("name") or "").strip()
+            exercise_library_id = ex.get("exercise_library_id")  # UI bunu gönderecek
+
+            if not exercise_library_id:
+                exercise_library_id = resolve_exercise_library_id(cur, exercise_name)
 
             cur.execute(
                 """
