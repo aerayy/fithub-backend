@@ -9,41 +9,36 @@ router = APIRouter()
 
 
 def resolve_exercise_library_id(cur, name: str):
-    import re
-
-    def normalize_exercise_name(name: str) -> str:
-        name = name.lower().strip()
-        name = re.sub(r"[-_]", " ", name)
-        name = re.sub(r"\s+", " ", name)
-        name = name.replace("ups", "up")
-        name = name.replace("twists", "twist")
-        name = name.replace("flies", "fly")
-        return name
-
     if not name:
         return None
 
-    normalized = normalize_exercise_name(name)
-    like = f"%{normalized}%"
-
+    q = name.lower().strip()
 
     cur.execute(
         """
-        SELECT id
-        FROM exercise_library
+        WITH q AS (
+          SELECT regexp_replace(lower(%s), '[^a-z0-9]+', ' ', 'g') AS qnorm
+        )
+        SELECT el.id
+        FROM exercise_library el, q
         WHERE
-            canonical_name ILIKE %s
-            OR external_id ILIKE %s
-            OR (aliases IS NOT NULL AND EXISTS (
-                SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s
-            ))
+          regexp_replace(lower(el.canonical_name), '[^a-z0-9]+', ' ', 'g') LIKE ('%' || q.qnorm || '%')
+          OR regexp_replace(lower(el.external_id), '[^a-z0-9]+', ' ', 'g') LIKE ('%' || q.qnorm || '%')
+          OR (
+            el.aliases IS NOT NULL AND EXISTS (
+              SELECT 1
+              FROM unnest(el.aliases) a
+              WHERE regexp_replace(lower(a), '[^a-z0-9]+', ' ', 'g') LIKE ('%' || q.qnorm || '%')
+            )
+          )
         ORDER BY
-            CASE WHEN lower(canonical_name) = lower(%s) THEN 0 ELSE 1 END,
-            canonical_name ASC
+          CASE WHEN regexp_replace(lower(el.canonical_name), '[^a-z0-9]+', ' ', 'g') = q.qnorm THEN 0 ELSE 1 END,
+          el.canonical_name ASC
         LIMIT 1
         """,
-        (like, like, like, q),
+        (q,),
     )
+
     row = cur.fetchone()
     if not row:
         return None
@@ -51,6 +46,7 @@ def resolve_exercise_library_id(cur, name: str):
     if isinstance(row, dict):
         return row.get("id")
     return row[0]
+
 
 
 
