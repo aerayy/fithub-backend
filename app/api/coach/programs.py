@@ -8,6 +8,41 @@ from app.core.security import require_role
 router = APIRouter()
 
 
+def resolve_exercise_library_id(cur, name: str):
+    if not name:
+        return None
+
+    q = name.strip()
+    like = f"%{q}%"
+
+    cur.execute(
+        """
+        SELECT id
+        FROM exercise_library
+        WHERE
+            canonical_name ILIKE %s
+            OR external_id ILIKE %s
+            OR (aliases IS NOT NULL AND EXISTS (
+                SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s
+            ))
+        ORDER BY
+            CASE WHEN lower(canonical_name) = lower(%s) THEN 0 ELSE 1 END,
+            canonical_name ASC
+        LIMIT 1
+        """,
+        (like, like, like, q),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+
+    if isinstance(row, dict):
+        return row.get("id")
+    return row[0]
+
+
+
+
 def _fetchone_id(row):
     if row is None:
         return None
@@ -161,21 +196,26 @@ def save_workout_program(
         workout_day_id = _fetchone_id(cur.fetchone())
 
         for ex_order, ex in enumerate(exercises, start=1):
+            exercise_name = ex.get("name")
+            exercise_library_id = resolve_exercise_library_id(cur, exercise_name)
+
             cur.execute(
                 """
                 INSERT INTO workout_exercises
-                (workout_day_id, exercise_name, sets, reps, notes, order_index)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                (workout_day_id, exercise_name, exercise_library_id, sets, reps, notes, order_index)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     workout_day_id,
-                    ex.get("name"),
+                    exercise_name,
+                    exercise_library_id,
                     ex.get("sets"),
                     ex.get("reps"),
                     ex.get("notes"),
                     ex_order,
                 ),
             )
+
 
         day_order += 1
 
