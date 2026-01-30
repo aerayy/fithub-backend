@@ -28,6 +28,7 @@ class FoodItemOut(BaseModel):
     name_tr: Optional[str] = None
     description: Optional[str] = None
     data_type: Optional[str] = None
+    piece_weight_g: Optional[float] = None  # 1 adet = X gram (null = sadece gram)
     nutrients: FoodNutrients
 
 
@@ -42,23 +43,20 @@ def search_foods(
     q: str = Query(..., min_length=2, description="Search query (min 2 chars)"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
+    featured_only: bool = Query(True, description="Show only curated featured foods"),
     db=Depends(get_db),
 ):
     """
     Search foods by name (Turkish or English).
     
-    Search priority:
-    1. Turkish name (food_localization_tr.name_tr)
-    2. Turkish aliases (food_localization_tr.aliases_tr)
-    3. English name (food_items.name_en)
+    featured_only=True (default): Sadece öne çıkarılan besinler - daha temiz liste.
+    featured_only=False: Tüm eşleşen besinler.
     
-    Returns: Foods with 100g macro values
+    piece_weight_g: Varsa "Adet" birimi kullanılabilir (1 adet = X gram).
     """
     cur = db.cursor()
     search_pattern = f"%{q.lower()}%"
 
-    # Search query: Turkish name/aliases first, then English name
-    # Use ILIKE for case-insensitive search
     cur.execute(
         """
         WITH matched_foods AS (
@@ -69,10 +67,10 @@ def search_foods(
                 fi.description,
                 fi.data_type,
                 COALESCE(fl.name_tr, fi.name_en) as name_tr,
-                -- Priority scoring: TR name=3, TR alias=2, EN name=1
+                fl.piece_weight_g,
                 CASE
                     WHEN fl.name_tr ILIKE %s THEN 3
-                    WHEN EXISTS (
+                    WHEN fl.aliases_tr IS NOT NULL AND EXISTS (
                         SELECT 1 FROM unnest(fl.aliases_tr) alias
                         WHERE alias ILIKE %s
                     ) THEN 2
@@ -82,12 +80,13 @@ def search_foods(
             FROM food_items fi
             LEFT JOIN food_localization_tr fl ON fi.id = fl.food_id
             WHERE
-                fl.name_tr ILIKE %s
-                OR EXISTS (
+                (fl.name_tr ILIKE %s
+                OR (fl.aliases_tr IS NOT NULL AND EXISTS (
                     SELECT 1 FROM unnest(fl.aliases_tr) alias
                     WHERE alias ILIKE %s
-                )
-                OR fi.name_en ILIKE %s
+                ))
+                OR fi.name_en ILIKE %s)
+                AND (%s = FALSE OR COALESCE(fl.is_featured, FALSE) = TRUE)
         )
         SELECT
             mf.id,
@@ -96,6 +95,7 @@ def search_foods(
             mf.name_tr,
             mf.description,
             mf.data_type,
+            mf.piece_weight_g,
             fn.calories_kcal,
             fn.protein_g,
             fn.fat_g,
@@ -115,6 +115,7 @@ def search_foods(
             search_pattern,
             search_pattern,
             search_pattern,
+            featured_only,
             limit,
             offset,
         ),
@@ -128,14 +129,15 @@ def search_foods(
         FROM food_items fi
         LEFT JOIN food_localization_tr fl ON fi.id = fl.food_id
         WHERE
-            fl.name_tr ILIKE %s
-            OR EXISTS (
+            (fl.name_tr ILIKE %s
+            OR (fl.aliases_tr IS NOT NULL AND EXISTS (
                 SELECT 1 FROM unnest(fl.aliases_tr) alias
                 WHERE alias ILIKE %s
-            )
-            OR fi.name_en ILIKE %s
+            ))
+            OR fi.name_en ILIKE %s)
+            AND (%s = FALSE OR COALESCE(fl.is_featured, FALSE) = TRUE)
         """,
-        (search_pattern, search_pattern, search_pattern),
+        (search_pattern, search_pattern, search_pattern, featured_only),
     )
     total = cur.fetchone()["count"] or 0
 
@@ -149,6 +151,7 @@ def search_foods(
                 name_tr=row.get("name_tr"),
                 description=row.get("description"),
                 data_type=row.get("data_type"),
+                piece_weight_g=row.get("piece_weight_g"),
                 nutrients=FoodNutrients(
                     calories_kcal=row.get("calories_kcal"),
                     protein_g=row.get("protein_g"),
@@ -185,6 +188,7 @@ def get_food_detail(
             fi.description,
             fi.data_type,
             COALESCE(fl.name_tr, fi.name_en) as name_tr,
+            fl.piece_weight_g,
             fn.calories_kcal,
             fn.protein_g,
             fn.fat_g,
@@ -211,6 +215,7 @@ def get_food_detail(
         name_tr=row.get("name_tr"),
         description=row.get("description"),
         data_type=row.get("data_type"),
+        piece_weight_g=row.get("piece_weight_g"),
         nutrients=FoodNutrients(
             calories_kcal=row.get("calories_kcal"),
             protein_g=row.get("protein_g"),
