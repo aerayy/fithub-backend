@@ -34,3 +34,8 @@ try:
     from . import workouts  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import nutrition  # noqa: F401
+except Exception:
+    pass
