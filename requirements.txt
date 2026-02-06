@@ -8,5 +8,6 @@ email-validator
 python-dotenv
 openai>=1.12.0
 requests
+google-auth
 
 

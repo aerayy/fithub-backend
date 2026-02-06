@@ -27,3 +27,8 @@ class OnboardingRequest(BaseModel):
     bad_habit: Optional[List[str]] = None
     what_motivate: Optional[List[str]] = None
     workout_place: Optional[List[str]] = None
+
+    preferred_workout_days: Optional[List[str]] = None
+    preferred_workout_hours: Optional[str] = None
+    nutrition_budget: Optional[str] = None
+    target_weight_kg: Optional[float] = None

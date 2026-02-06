@@ -56,6 +56,10 @@ def save_onboarding(
             bad_habit,
             what_motivate,
             workout_place,
+            preferred_workout_days,
+            preferred_workout_hours,
+            nutrition_budget,
+            target_weight_kg,
             created_at,
             updated_at
         )
@@ -81,6 +85,10 @@ def save_onboarding(
             %(bad_habit)s,
             %(what_motivate)s,
             %(workout_place)s,
+            %(preferred_workout_days)s,
+            %(preferred_workout_hours)s,
+            %(nutrition_budget)s,
+            %(target_weight_kg)s,
             NOW(),
             NOW()
         )
@@ -105,6 +113,10 @@ def save_onboarding(
             bad_habit           = EXCLUDED.bad_habit,
             what_motivate       = EXCLUDED.what_motivate,
             workout_place       = EXCLUDED.workout_place,
+            preferred_workout_days = EXCLUDED.preferred_workout_days,
+            preferred_workout_hours = EXCLUDED.preferred_workout_hours,
+            nutrition_budget    = EXCLUDED.nutrition_budget,
+            target_weight_kg   = EXCLUDED.target_weight_kg,
             updated_at          = NOW();
         """,
         {
@@ -129,6 +141,10 @@ def save_onboarding(
             "bad_habit": Json(req.bad_habit) if req.bad_habit else None,
             "what_motivate": Json(req.what_motivate) if req.what_motivate else None,
             "workout_place": Json(req.workout_place) if req.workout_place else None,
+            "preferred_workout_days": Json(req.preferred_workout_days) if req.preferred_workout_days else None,
+            "preferred_workout_hours": req.preferred_workout_hours,
+            "nutrition_budget": req.nutrition_budget,
+            "target_weight_kg": req.target_weight_kg,
         },
     )
 
@@ -199,7 +215,8 @@ def get_onboarding(user_id: int, db=Depends(get_db)):
             id, user_id, full_name, age, gender, weight_kg, height_cm,
             your_goal, body_type, experience, how_fit, knee_pain, pushups,
             stressed, commit, pref_workout_length, how_motivated, plan_reference,
-            body_part_focus, bad_habit, what_motivate, workout_place
+            body_part_focus, bad_habit, what_motivate, workout_place,
+            preferred_workout_days, preferred_workout_hours, nutrition_budget, target_weight_kg
         FROM client_onboarding
         WHERE user_id = %s
         """,
