@@ -12,10 +12,12 @@ from app.core.database import get_db
 from app.core.security import require_role
 from app.core.config import OPENAI_API_KEY
 from app.api.coach.students import router as students_router
+from app.api.coach.conversations import router as conversations_router
 
 
 router = APIRouter(prefix="/coach", tags=["coach"])
 router.include_router(students_router)
+router.include_router(conversations_router)
 
 # Predefined service tags (for future frontend use)
 PREDEFINED_SERVICE_TAGS = [
