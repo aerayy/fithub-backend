@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class CreateConversationBody(BaseModel):
+    client_user_id: int
+
+
 class SendMessageBody(BaseModel):
     body: str  # validated non-empty (see validator)
 
@@ -76,6 +80,68 @@ def list_coach_conversations(
             "unread_count": r.get("unread_count") or 0,
         })
     return {"conversations": conversations}
+
+
+@router.post("/conversations", status_code=201)
+def create_coach_conversation(
+    body: CreateConversationBody,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Find or create conversation with a client. Client must have active subscription with this coach.
+    Admin panel uses this before sending first message; response must include conversation id.
+    """
+    coach_user_id = current_user["id"]
+    client_user_id = body.client_user_id
+    cur = db.cursor()
+
+    # Validate: client has active subscription with this coach
+    cur.execute(
+        """
+        SELECT id FROM subscriptions
+        WHERE client_user_id = %s AND coach_user_id = %s
+          AND status = 'active' AND (ends_at IS NULL OR ends_at > NOW())
+        LIMIT 1
+        """,
+        (client_user_id, coach_user_id),
+    )
+    sub = cur.fetchone()
+    if not sub:
+        raise HTTPException(
+            status_code=403,
+            detail="Client does not have an active subscription with you",
+        )
+    subscription_id = sub.get("id")
+
+    # Find or create conversation
+    cur.execute(
+        """
+        INSERT INTO conversations (client_user_id, coach_user_id, subscription_id, updated_at)
+        VALUES (%s, %s, %s, NOW())
+        ON CONFLICT (client_user_id, coach_user_id) DO UPDATE SET updated_at = NOW()
+        RETURNING id, client_user_id, coach_user_id
+        """,
+        (client_user_id, coach_user_id, subscription_id),
+    )
+    row = cur.fetchone()
+    db.commit()
+
+    cur.execute(
+        "SELECT COALESCE(full_name, email) AS client_name FROM users WHERE id = %s",
+        (client_user_id,),
+    )
+    name_row = cur.fetchone()
+    client_name = name_row["client_name"] if name_row else None
+
+    return {
+        "id": row["id"],
+        "client_user_id": row["client_user_id"],
+        "client_name": client_name,
+        "last_message_preview": None,
+        "last_message_at": None,
+        "unread_count": 0,
+    }
 
 
 @router.get("/conversations/{conversation_id}/messages")
