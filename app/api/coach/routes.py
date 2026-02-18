@@ -1403,3 +1403,168 @@ def update_package(package_id: int, body: CoachPackageUpdate, db=Depends(get_db)
     except psycopg2.Error as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"DB error in PUT /coach/packages: {e.pgerror or str(e)}")
+
+
+# --------------------------------------------------
+# DASHBOARD SUMMARY
+# --------------------------------------------------
+@router.get("/dashboard/summary")
+def get_dashboard_summary(
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # 1) Unread messages count
+    cur.execute("""
+        SELECT COUNT(*)::int AS total_unread
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.coach_user_id = %s
+          AND m.sender_type = 'client'
+          AND m.read_at IS NULL
+    """, (coach_id,))
+    unread_messages = cur.fetchone()["total_unread"]
+
+    # 2) Pending approvals count
+    cur.execute("""
+        SELECT COUNT(*)::int AS cnt
+        FROM subscriptions
+        WHERE coach_user_id = %s
+          AND status = 'pending'
+          AND purchased_at >= NOW() - INTERVAL '7 days'
+    """, (coach_id,))
+    pending_approvals = cur.fetchone()["cnt"]
+
+    # 3) Active students count
+    cur.execute("""
+        SELECT COUNT(*)::int AS cnt
+        FROM clients
+        WHERE assigned_coach_id = %s
+    """, (coach_id,))
+    active_students = cur.fetchone()["cnt"]
+
+    # 4) Ending soon: active subscriptions ending within 7 days
+    cur.execute("""
+        SELECT
+            u.id AS student_id,
+            COALESCE(o.full_name, u.email) AS full_name,
+            s.ends_at,
+            EXTRACT(DAY FROM s.ends_at - NOW())::int AS days_left
+        FROM subscriptions s
+        JOIN users u ON u.id = s.client_user_id
+        LEFT JOIN client_onboarding o ON o.user_id = u.id
+        WHERE s.coach_user_id = %s
+          AND s.status = 'active'
+          AND s.ends_at > NOW()
+          AND s.ends_at <= NOW() + INTERVAL '7 days'
+        ORDER BY s.ends_at ASC
+    """, (coach_id,))
+    ending_soon = cur.fetchall()
+
+    # 5) Onboarding incomplete
+    cur.execute("""
+        SELECT
+            u.id AS student_id,
+            COALESCE(o.full_name, u.email) AS full_name
+        FROM clients c
+        JOIN users u ON u.id = c.user_id
+        LEFT JOIN client_onboarding o ON o.user_id = u.id
+        WHERE c.assigned_coach_id = %s
+          AND (c.onboarding_done IS NULL OR c.onboarding_done = FALSE)
+        ORDER BY u.id
+    """, (coach_id,))
+    onboarding_incomplete = cur.fetchall()
+
+    # 6) Recent activity: last 10 events
+    cur.execute("""
+        (
+            SELECT
+                'new_message' AS event_type,
+                m.created_at AS event_at,
+                COALESCE(o.full_name, u.email) AS actor_name,
+                CASE WHEN m.message_type = 'image' THEN '[Photo]'
+                     ELSE LEFT(m.body, 80)
+                END AS detail
+            FROM messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            JOIN users u ON u.id = c.client_user_id
+            LEFT JOIN client_onboarding o ON o.user_id = u.id
+            WHERE c.coach_user_id = %s
+              AND m.sender_type = 'client'
+            ORDER BY m.created_at DESC
+            LIMIT 10
+        )
+        UNION ALL
+        (
+            SELECT
+                'subscription_approved' AS event_type,
+                s.decided_at AS event_at,
+                COALESCE(o.full_name, u.email) AS actor_name,
+                s.plan_name AS detail
+            FROM subscriptions s
+            JOIN users u ON u.id = s.client_user_id
+            LEFT JOIN client_onboarding o ON o.user_id = u.id
+            WHERE s.coach_user_id = %s
+              AND s.decision = 'approved'
+              AND s.decided_at IS NOT NULL
+            ORDER BY s.decided_at DESC
+            LIMIT 10
+        )
+        UNION ALL
+        (
+            SELECT
+                'new_purchase' AS event_type,
+                s.purchased_at AS event_at,
+                COALESCE(o.full_name, u.email) AS actor_name,
+                s.plan_name AS detail
+            FROM subscriptions s
+            JOIN users u ON u.id = s.client_user_id
+            LEFT JOIN client_onboarding o ON o.user_id = u.id
+            WHERE s.coach_user_id = %s
+              AND s.status = 'pending'
+            ORDER BY s.purchased_at DESC
+            LIMIT 10
+        )
+        UNION ALL
+        (
+            SELECT
+                'program_assigned' AS event_type,
+                wp.updated_at AS event_at,
+                COALESCE(o.full_name, u.email) AS actor_name,
+                wp.title AS detail
+            FROM workout_programs wp
+            JOIN users u ON u.id = wp.client_user_id
+            LEFT JOIN client_onboarding o ON o.user_id = u.id
+            WHERE wp.coach_user_id = %s
+              AND wp.is_active = TRUE
+            ORDER BY wp.updated_at DESC
+            LIMIT 10
+        )
+        ORDER BY event_at DESC NULLS LAST
+        LIMIT 10
+    """, (coach_id, coach_id, coach_id, coach_id))
+    recent_activity = cur.fetchall()
+
+    # Serialize datetimes
+    for item in recent_activity:
+        if item.get("event_at") and hasattr(item["event_at"], "isoformat"):
+            item["event_at"] = item["event_at"].isoformat()
+    for item in ending_soon:
+        if item.get("ends_at") and hasattr(item["ends_at"], "isoformat"):
+            item["ends_at"] = item["ends_at"].isoformat()
+
+    return {
+        "kpi": {
+            "unread_messages": unread_messages,
+            "pending_approvals": pending_approvals,
+            "active_students": active_students,
+            "ending_soon_count": len(ending_soon),
+        },
+        "needed": {
+            "ending_soon": ending_soon,
+            "onboarding_incomplete": onboarding_incomplete,
+        },
+        "recent_activity": recent_activity,
+    }
