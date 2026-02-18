@@ -1477,7 +1477,67 @@ def get_dashboard_summary(
     """, (coach_id,))
     onboarding_incomplete = cur.fetchall()
 
-    # 6) Recent activity: last 10 events
+    # 6) Monthly revenue (from active subscriptions via coach_packages price)
+    cur.execute("""
+        SELECT COALESCE(SUM(cp.price), 0)::int AS monthly_revenue
+        FROM subscriptions s
+        JOIN coach_packages cp ON cp.id = s.package_id
+        WHERE s.coach_user_id = %s
+          AND s.status = 'active'
+          AND s.ends_at > NOW()
+    """, (coach_id,))
+    monthly_revenue = cur.fetchone()["monthly_revenue"]
+
+    # 7) Students without active workout program
+    cur.execute("""
+        SELECT
+            u.id AS student_id,
+            COALESCE(o.full_name, u.email) AS full_name,
+            'workout' AS missing_type
+        FROM clients c
+        JOIN users u ON u.id = c.user_id
+        LEFT JOIN client_onboarding o ON o.user_id = u.id
+        WHERE c.assigned_coach_id = %s
+          AND NOT EXISTS (
+              SELECT 1 FROM workout_programs wp
+              WHERE wp.client_user_id = u.id
+                AND wp.coach_user_id = %s
+                AND wp.is_active = TRUE
+          )
+        ORDER BY u.id
+    """, (coach_id, coach_id))
+    missing_workout = cur.fetchall()
+
+    # 8) Students without active nutrition program
+    cur.execute("""
+        SELECT
+            u.id AS student_id,
+            COALESCE(o.full_name, u.email) AS full_name,
+            'nutrition' AS missing_type
+        FROM clients c
+        JOIN users u ON u.id = c.user_id
+        LEFT JOIN client_onboarding o ON o.user_id = u.id
+        WHERE c.assigned_coach_id = %s
+          AND NOT EXISTS (
+              SELECT 1 FROM nutrition_programs np
+              WHERE np.client_user_id = u.id
+                AND np.coach_user_id = %s
+                AND np.is_active = TRUE
+          )
+        ORDER BY u.id
+    """, (coach_id, coach_id))
+    missing_nutrition = cur.fetchall()
+
+    # 9) Coach name for greeting
+    cur.execute("""
+        SELECT COALESCE(u.full_name, u.email) AS coach_name
+        FROM users u
+        WHERE u.id = %s
+    """, (coach_id,))
+    coach_row = cur.fetchone()
+    coach_name = coach_row["coach_name"] if coach_row else ""
+
+    # 10) Recent activity: last 10 events
     cur.execute("""
         (
             SELECT
@@ -1556,15 +1616,19 @@ def get_dashboard_summary(
             item["ends_at"] = item["ends_at"].isoformat()
 
     return {
+        "coach_name": coach_name,
         "kpi": {
             "unread_messages": unread_messages,
             "pending_approvals": pending_approvals,
             "active_students": active_students,
             "ending_soon_count": len(ending_soon),
+            "monthly_revenue": monthly_revenue,
         },
         "needed": {
             "ending_soon": ending_soon,
             "onboarding_incomplete": onboarding_incomplete,
+            "missing_workout": missing_workout,
+            "missing_nutrition": missing_nutrition,
         },
         "recent_activity": recent_activity,
     }
