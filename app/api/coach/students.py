@@ -111,7 +111,7 @@ def get_active_students_from_subscriptions(
 
     cur.execute(
         """
-        SELECT DISTINCT
+        SELECT
             u.id AS student_id,
             u.email,
             COALESCE(o.full_name, u.email) AS full_name,
@@ -119,16 +119,20 @@ def get_active_students_from_subscriptions(
             s.plan_name,
             s.ends_at,
             EXTRACT(DAY FROM s.ends_at - NOW())::int AS days_left
-        FROM subscriptions s
-        JOIN users u ON u.id = s.client_user_id
-        LEFT JOIN clients c ON c.user_id = u.id
+        FROM clients c
+        JOIN users u ON u.id = c.user_id
         LEFT JOIN client_onboarding o ON o.user_id = u.id
-        WHERE s.coach_user_id = %s
-          AND s.status = 'active'
-          AND s.ends_at > NOW()
-        ORDER BY s.ends_at ASC
+        LEFT JOIN LATERAL (
+            SELECT plan_name, ends_at
+            FROM subscriptions
+            WHERE client_user_id = u.id AND coach_user_id = %s
+            ORDER BY id DESC
+            LIMIT 1
+        ) s ON TRUE
+        WHERE c.assigned_coach_id = %s
+        ORDER BY u.id
         """,
-        (coach_id,),
+        (coach_id, coach_id),
     )
     return {"students": cur.fetchall()}
 
