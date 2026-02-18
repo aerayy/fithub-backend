@@ -1197,9 +1197,12 @@ def get_my_profile(
 
     cur.execute(
         """
-        SELECT user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active
-        FROM coaches
-        WHERE user_id = %s
+        SELECT c.user_id, c.bio, c.photo_url, c.price_per_month, c.rating, c.rating_count,
+               c.specialties, c.instagram, c.is_active,
+               u.email, COALESCE(u.full_name, u.email) AS full_name
+        FROM coaches c
+        JOIN users u ON u.id = c.user_id
+        WHERE c.user_id = %s
         """,
         (coach_id,),
     )
@@ -1216,6 +1219,13 @@ def get_my_profile(
         )
         row = cur.fetchone()
         db.commit()
+        # Add user info to the new row
+        cur.execute("SELECT email, COALESCE(full_name, email) AS full_name FROM users WHERE id = %s", (coach_id,))
+        user_row = cur.fetchone()
+        if user_row:
+            row = dict(row)
+            row["email"] = user_row["email"]
+            row["full_name"] = user_row["full_name"]
 
     return {"profile": row}
 
