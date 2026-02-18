@@ -18,4 +18,8 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
 print("OPENAI_API_KEY loaded:", bool(OPENAI_API_KEY))

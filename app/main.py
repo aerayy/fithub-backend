@@ -14,6 +14,8 @@ from app.api.subscriptions import router as subscriptions_router
 import os
 from app.api.exercises import router as exercises_router
 from app.api.foods import router as foods_router
+from app.api.upload import router as upload_router
+from app.api.ws import router as ws_router
 
 
 app = FastAPI()
@@ -46,4 +48,6 @@ app.include_router(client_router)
 app.include_router(subscriptions_router)
 app.include_router(exercises_router)
 app.include_router(foods_router)
+app.include_router(upload_router)
+app.include_router(ws_router)
 
