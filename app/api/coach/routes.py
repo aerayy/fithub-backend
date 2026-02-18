@@ -1239,30 +1239,46 @@ def update_my_profile(
     coach_id = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
 
+    # Update full_name in users table if provided
+    if payload.get("full_name") is not None:
+        cur.execute(
+            "UPDATE users SET full_name = %s WHERE id = %s",
+            (payload["full_name"].strip() or None, coach_id),
+        )
+
     allowed_fields = {"bio", "photo_url", "price_per_month", "specialties", "instagram", "is_active"}
     updates = {k: payload.get(k) for k in payload.keys() if k in allowed_fields}
 
-    if not updates:
-        raise HTTPException(status_code=400, detail="No valid fields to update")
+    if updates:
+        set_parts = []
+        values = []
+        for k, v in updates.items():
+            set_parts.append(f"{k}=%s")
+            values.append(v)
 
-    set_parts = []
-    values = []
-    for k, v in updates.items():
-        set_parts.append(f"{k}=%s")
-        values.append(v)
+        values.append(coach_id)
 
-    values.append(coach_id)
+        cur.execute(
+            f"""
+            UPDATE coaches
+            SET {", ".join(set_parts)}
+            WHERE user_id = %s
+            """,
+            tuple(values),
+        )
 
+    # Return full profile with user info
     cur.execute(
-        f"""
-        UPDATE coaches
-        SET {", ".join(set_parts)}
-        WHERE user_id = %s
-        RETURNING user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active
+        """
+        SELECT c.user_id, c.bio, c.photo_url, c.price_per_month, c.rating, c.rating_count,
+               c.specialties, c.instagram, c.is_active,
+               u.email, COALESCE(u.full_name, u.email) AS full_name
+        FROM coaches c
+        JOIN users u ON u.id = c.user_id
+        WHERE c.user_id = %s
         """,
-        tuple(values),
+        (coach_id,),
     )
-
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Coach profile not found")
