@@ -1198,7 +1198,7 @@ def get_my_profile(
     cur.execute(
         """
         SELECT c.user_id, c.bio, c.photo_url, c.price_per_month, c.rating, c.rating_count,
-               c.specialties, c.instagram, c.is_active,
+               c.specialties, c.instagram, c.is_active, c.title, c.certificates, c.photos,
                u.email, COALESCE(u.full_name, u.email) AS full_name
         FROM coaches c
         JOIN users u ON u.id = c.user_id
@@ -1239,14 +1239,24 @@ def update_my_profile(
     coach_id = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
 
-    # Update full_name in users table if provided
+    # Update users table fields (full_name, email)
+    user_updates = []
+    user_values = []
     if payload.get("full_name") is not None:
+        user_updates.append("full_name = %s")
+        user_values.append(payload["full_name"].strip() or None)
+    if payload.get("email") is not None:
+        user_updates.append("email = %s")
+        user_values.append(payload["email"].strip() or None)
+    if user_updates:
+        user_values.append(coach_id)
         cur.execute(
-            "UPDATE users SET full_name = %s WHERE id = %s",
-            (payload["full_name"].strip() or None, coach_id),
+            f"UPDATE users SET {', '.join(user_updates)} WHERE id = %s",
+            tuple(user_values),
         )
 
-    allowed_fields = {"bio", "photo_url", "price_per_month", "specialties", "instagram", "is_active"}
+    # Update coaches table fields
+    allowed_fields = {"bio", "photo_url", "price_per_month", "specialties", "instagram", "is_active", "title", "certificates", "photos"}
     updates = {k: payload.get(k) for k in payload.keys() if k in allowed_fields}
 
     if updates:
@@ -1271,7 +1281,7 @@ def update_my_profile(
     cur.execute(
         """
         SELECT c.user_id, c.bio, c.photo_url, c.price_per_month, c.rating, c.rating_count,
-               c.specialties, c.instagram, c.is_active,
+               c.specialties, c.instagram, c.is_active, c.title, c.certificates, c.photos,
                u.email, COALESCE(u.full_name, u.email) AS full_name
         FROM coaches c
         JOIN users u ON u.id = c.user_id
