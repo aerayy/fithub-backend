@@ -55,7 +55,7 @@ def client_me(
             u.id as user_id,
             u.email,
             u.role,
-            u.full_name,
+            COALESCE(u.full_name, co.full_name) AS full_name,
             c.onboarding_done,
             c.gender,
             c.goal_type,
@@ -63,6 +63,7 @@ def client_me(
             c.assigned_coach_id
         FROM users u
         LEFT JOIN clients c ON c.user_id = u.id
+        LEFT JOIN client_onboarding co ON co.user_id = u.id
         WHERE u.id = %s
         """,
         (user_id,),
