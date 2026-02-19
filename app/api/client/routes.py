@@ -49,3 +49,13 @@ try:
     from . import recovery  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import motivation  # noqa: F401
+except Exception:
+    pass
+
+try:
+    from . import challenge  # noqa: F401
+except Exception:
+    pass
