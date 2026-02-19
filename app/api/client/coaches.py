@@ -167,7 +167,6 @@ def get_coach_detail(
                 duration_days,
                 price,
                 is_active,
-                services,
                 created_at,
                 updated_at
             FROM coach_packages
@@ -188,7 +187,6 @@ def get_coach_detail(
                 "duration_days": p.get("duration_days"),
                 "price": float(p["price"]) if p.get("price") is not None else None,
                 "is_active": p.get("is_active", True),
-                "services": p.get("services") or [],
                 "created_at": p["created_at"].isoformat() if p.get("created_at") else None,
                 "updated_at": p["updated_at"].isoformat() if p.get("updated_at") else None,
             })
