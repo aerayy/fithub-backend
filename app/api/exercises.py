@@ -29,7 +29,8 @@ def search_exercises(
             equipment,
             category,
             primary_muscles,
-            secondary_muscles
+            secondary_muscles,
+            gif_url
         FROM exercise_library
         WHERE
             canonical_name ILIKE %s

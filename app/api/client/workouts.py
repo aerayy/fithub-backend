@@ -51,10 +51,12 @@ def fetch_active_program_with_payload(client_user_id: int, db):
         placeholders = ",".join(["%s"] * len(day_ids))
         cur.execute(
             f"""
-            SELECT id, workout_day_id, exercise_name, sets, reps, notes, order_index
-            FROM workout_exercises
-            WHERE workout_day_id IN ({placeholders})
-            ORDER BY workout_day_id ASC, order_index ASC, id ASC
+            SELECT we.id, we.workout_day_id, we.exercise_name, we.sets, we.reps,
+                   we.notes, we.order_index, el.gif_url
+            FROM workout_exercises we
+            LEFT JOIN exercise_library el ON el.id = we.exercise_library_id
+            WHERE we.workout_day_id IN ({placeholders})
+            ORDER BY we.workout_day_id ASC, we.order_index ASC, we.id ASC
             """,
             tuple(day_ids),
         )
@@ -80,13 +82,16 @@ def build_day_payload_from_flat_exercises(exercises: List[Dict], program_title: 
     """
     exercise_items = []
     for ex in exercises:
-        exercise_items.append({
+        item = {
             "type": "exercise",
             "name": ex.get("exercise_name") or "",
             "sets": ex.get("sets"),
             "reps": ex.get("reps") or "",
             "notes": ex.get("notes") or "",
-        })
+        }
+        if ex.get("gif_url"):
+            item["gif_url"] = ex["gif_url"]
+        exercise_items.append(item)
 
     return {
         "title": program_title or "",

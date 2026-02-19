@@ -143,9 +143,10 @@ def get_active_programs(
             """
             SELECT
                 e.id, e.workout_day_id, e.exercise_name, e.sets, e.reps, e.notes, e.order_index,
-                e.created_at, e.updated_at
+                e.created_at, e.updated_at, el.gif_url
             FROM workout_exercises e
             JOIN workout_days d ON d.id = e.workout_day_id
+            LEFT JOIN exercise_library el ON el.id = e.exercise_library_id
             WHERE d.workout_program_id=%s
             ORDER BY d.order_index ASC, e.order_index ASC, e.id ASC
             """,
@@ -759,10 +760,12 @@ def get_latest_workout_program(
         placeholders = ",".join(["%s"] * len(day_ids))
         cur.execute(
             f"""
-            SELECT id, workout_day_id, exercise_name, sets, reps, notes, order_index
-            FROM workout_exercises
-            WHERE workout_day_id IN ({placeholders})
-            ORDER BY workout_day_id ASC, order_index ASC, id ASC
+            SELECT we.id, we.workout_day_id, we.exercise_name, we.sets, we.reps,
+                   we.notes, we.order_index, el.gif_url
+            FROM workout_exercises we
+            LEFT JOIN exercise_library el ON el.id = we.exercise_library_id
+            WHERE we.workout_day_id IN ({placeholders})
+            ORDER BY we.workout_day_id ASC, we.order_index ASC, we.id ASC
             """,
             tuple(day_ids),
         )
@@ -787,13 +790,14 @@ def get_latest_workout_program(
         day_id = day["id"]
         exercises = exercises_by_day_id.get(day_id, [])
         
-        # Convert exercises to flat format: {name, sets, reps, notes}
+        # Convert exercises to flat format: {name, sets, reps, notes, gif_url}
         week[day_key] = [
             {
                 "name": ex.get("exercise_name") or "",
                 "sets": ex.get("sets"),
                 "reps": ex.get("reps") or "",
                 "notes": ex.get("notes") or "",
+                **({"gif_url": ex["gif_url"]} if ex.get("gif_url") else {}),
             }
             for ex in exercises
         ]

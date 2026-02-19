@@ -130,9 +130,10 @@ def get_active_programs(
             """
             SELECT
                 e.id, e.workout_day_id, e.exercise_name, e.sets, e.reps, e.notes, e.order_index,
-                e.created_at, e.updated_at
+                e.created_at, e.updated_at, el.gif_url
             FROM workout_exercises e
             JOIN workout_days d ON d.id = e.workout_day_id
+            LEFT JOIN exercise_library el ON el.id = e.exercise_library_id
             WHERE d.workout_program_id=%s
             ORDER BY d.order_index ASC, e.order_index ASC, e.id ASC
             """,
