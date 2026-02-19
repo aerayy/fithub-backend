@@ -44,3 +44,8 @@ try:
     from . import conversations  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import recovery  # noqa: F401
+except Exception:
+    pass
