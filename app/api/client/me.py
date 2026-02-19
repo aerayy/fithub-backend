@@ -1,10 +1,17 @@
 import logging
 from fastapi import Depends, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 from app.core.database import get_db
 from app.core.security import require_role
 from .routes import router
 
 logger = logging.getLogger(__name__)
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = None
+    phone_number: Optional[str] = None
 
 
 @router.get("/me")
@@ -56,6 +63,7 @@ def client_me(
             u.email,
             u.role,
             COALESCE(u.full_name, co.full_name) AS full_name,
+            u.phone_number,
             c.onboarding_done,
             c.gender,
             c.goal_type,
@@ -98,6 +106,59 @@ def client_me(
             "email": row["email"],
             "role": row["role"],
             "full_name": row.get("full_name"),
+            "phone_number": row.get("phone_number"),
         },
         "client": client,
+    }
+
+
+@router.put("/me")
+def update_client_me(
+    req: UpdateProfileRequest,
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """
+    Update current client user profile.
+    Only full_name and phone_number can be updated.
+    """
+    user_id = current_user["id"]
+    cur = db.cursor()
+
+    updates = []
+    values = []
+
+    if req.full_name is not None:
+        updates.append("full_name = %s")
+        values.append(req.full_name.strip() if req.full_name else None)
+
+    if req.phone_number is not None:
+        updates.append("phone_number = %s")
+        values.append(req.phone_number.strip() if req.phone_number else None)
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updates.append("updated_at = NOW()")
+    values.append(user_id)
+
+    cur.execute(
+        f"UPDATE users SET {', '.join(updates)} WHERE id = %s RETURNING id, email, full_name, phone_number",
+        values,
+    )
+    row = cur.fetchone()
+    db.commit()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    logger.info(f"[CLIENT_ME] Profile updated for user_id={user_id}")
+
+    return {
+        "user": {
+            "id": row["id"],
+            "email": row["email"],
+            "full_name": row.get("full_name"),
+            "phone_number": row.get("phone_number"),
+        },
     }
