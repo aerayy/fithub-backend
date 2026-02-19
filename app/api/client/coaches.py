@@ -97,8 +97,8 @@ def get_coaches(
             "full_name": row.get("full_name"),  # Handle NULL safely
             "bio": row.get("bio"),
             "photo_url": row.get("photo_url"),
-            "price_per_month": row.get("price_per_month"),  # Already numeric or None
-            "rating": row.get("rating"),  # Already numeric or None
+            "price_per_month": float(row["price_per_month"]) if row.get("price_per_month") is not None else None,
+            "rating": float(row["rating"]) if row.get("rating") is not None else None,
             "rating_count": row.get("rating_count") or 0,  # Default to 0 if NULL
             "specialties": row.get("specialties") or [],  # Default to empty array if NULL
             "instagram": row.get("instagram"),
@@ -174,15 +174,29 @@ def get_coach_detail(
         (coach_user_id,)
     )
     
-    packages = cur.fetchall() or []
-    
+    package_rows = cur.fetchall() or []
+    packages = []
+    for p in package_rows:
+        packages.append({
+            "id": p["id"],
+            "coach_user_id": p["coach_user_id"],
+            "name": p.get("name"),
+            "description": p.get("description"),
+            "duration_days": p.get("duration_days"),
+            "price": float(p["price"]) if p.get("price") is not None else None,
+            "is_active": p.get("is_active", True),
+            "services": p.get("services") or [],
+            "created_at": p["created_at"].isoformat() if p.get("created_at") else None,
+            "updated_at": p["updated_at"].isoformat() if p.get("updated_at") else None,
+        })
+
     coach = {
         "user_id": coach_row["user_id"],
         "full_name": coach_row.get("full_name"),
         "bio": coach_row.get("bio"),
         "photo_url": coach_row.get("photo_url"),
-        "price_per_month": coach_row.get("price_per_month"),
-        "rating": coach_row.get("rating"),
+        "price_per_month": float(coach_row["price_per_month"]) if coach_row.get("price_per_month") is not None else None,
+        "rating": float(coach_row["rating"]) if coach_row.get("rating") is not None else None,
         "rating_count": coach_row.get("rating_count") or 0,
         "specialties": coach_row.get("specialties") or [],
         "instagram": coach_row.get("instagram"),
