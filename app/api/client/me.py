@@ -55,6 +55,7 @@ def client_me(
             u.id as user_id,
             u.email,
             u.role,
+            u.full_name,
             c.onboarding_done,
             c.gender,
             c.goal_type,
@@ -95,6 +96,7 @@ def client_me(
             "id": row["user_id"],
             "email": row["email"],
             "role": row["role"],
+            "full_name": row.get("full_name"),
         },
         "client": client,
     }
