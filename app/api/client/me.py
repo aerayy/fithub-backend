@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 class UpdateProfileRequest(BaseModel):
     full_name: Optional[str] = None
     phone_number: Optional[str] = None
+    profile_photo_url: Optional[str] = None
 
 
 @router.get("/me")
@@ -64,6 +65,7 @@ def client_me(
             u.role,
             COALESCE(u.full_name, co.full_name) AS full_name,
             u.phone_number,
+            u.profile_photo_url,
             c.onboarding_done,
             c.gender,
             c.goal_type,
@@ -107,6 +109,7 @@ def client_me(
             "role": row["role"],
             "full_name": row.get("full_name"),
             "phone_number": row.get("phone_number"),
+            "profile_photo_url": row.get("profile_photo_url"),
         },
         "client": client,
     }
@@ -136,6 +139,10 @@ def update_client_me(
         updates.append("phone_number = %s")
         values.append(req.phone_number.strip() if req.phone_number else None)
 
+    if req.profile_photo_url is not None:
+        updates.append("profile_photo_url = %s")
+        values.append(req.profile_photo_url.strip() if req.profile_photo_url else None)
+
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
@@ -143,7 +150,7 @@ def update_client_me(
     values.append(user_id)
 
     cur.execute(
-        f"UPDATE users SET {', '.join(updates)} WHERE id = %s RETURNING id, email, full_name, phone_number",
+        f"UPDATE users SET {', '.join(updates)} WHERE id = %s RETURNING id, email, full_name, phone_number, profile_photo_url",
         values,
     )
     row = cur.fetchone()
@@ -160,5 +167,6 @@ def update_client_me(
             "email": row["email"],
             "full_name": row.get("full_name"),
             "phone_number": row.get("phone_number"),
+            "profile_photo_url": row.get("profile_photo_url"),
         },
     }
