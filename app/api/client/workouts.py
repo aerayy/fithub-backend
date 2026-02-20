@@ -110,6 +110,30 @@ def build_day_payload_from_flat_exercises(exercises: List[Dict], program_title: 
     }
 
 
+def _inject_gif_urls(payload: Dict, exercises: List[Dict]) -> Dict:
+    """
+    Inject gif_url from exercise records into day_payload items by matching exercise name.
+    """
+    # Build name -> gif_url lookup from exercises
+    gif_lookup = {}
+    for ex in exercises:
+        name = (ex.get("exercise_name") or "").strip().lower()
+        gif = ex.get("gif_url")
+        if name and gif:
+            gif_lookup[name] = gif
+
+    if not gif_lookup:
+        return payload
+
+    for block in payload.get("blocks", []):
+        for item in block.get("items", []):
+            name = (item.get("name") or "").strip().lower()
+            if name and name in gif_lookup and "gif_url" not in item:
+                item["gif_url"] = gif_lookup[name]
+
+    return payload
+
+
 def build_week_response(program: Dict, days: List[Dict]) -> Dict[str, Any]:
     """
     Build the week response structure from program and days.
@@ -137,6 +161,8 @@ def build_week_response(program: Dict, days: List[Dict]) -> Dict[str, Any]:
                     payload = day_payload
                 # Ensure it's a dict
                 if isinstance(payload, dict):
+                    # Inject gif_url from exercises into payload items
+                    _inject_gif_urls(payload, exercises)
                     week[day_key] = payload
                     continue
             except (json.JSONDecodeError, TypeError):
