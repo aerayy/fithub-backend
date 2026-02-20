@@ -116,12 +116,16 @@ def _inject_gif_urls(payload: Dict, exercises: List[Dict]) -> Dict:
     """
     # Build name -> gif_url lookup from exercises
     gif_lookup = {}
+    print(f"[inject_gif] exercises count: {len(exercises)}")
     for ex in exercises:
+        print(f"[inject_gif] exercise keys: {list(ex.keys())}")
         name = (ex.get("exercise_name") or "").strip().lower()
         gif = ex.get("gif_url")
+        print(f"[inject_gif] name={name} gif={'YES' if gif else 'NO'}")
         if name and gif:
             gif_lookup[name] = gif
 
+    print(f"[inject_gif] gif_lookup size: {len(gif_lookup)}")
     if not gif_lookup:
         return payload
 
