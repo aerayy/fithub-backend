@@ -68,6 +68,7 @@ def list_coach_conversations(
             c.id,
             c.client_user_id,
             COALESCE(u.full_name, u.email) AS client_name,
+            u.profile_photo_url AS client_avatar,
             (SELECT CASE WHEN message_type = 'image' THEN '[Foto]' ELSE body END FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_preview,
             (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_at,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'client' AND m.read_at IS NULL) AS unread_count
@@ -86,6 +87,7 @@ def list_coach_conversations(
             "id": r["id"],
             "client_user_id": r["client_user_id"],
             "client_name": r["client_name"],
+            "client_avatar": r.get("client_avatar"),
             "last_message_preview": (r["last_message_preview"] or "")[:100] if r.get("last_message_preview") else None,
             "last_message_at": r["last_message_at"].isoformat() if r.get("last_message_at") and hasattr(r["last_message_at"], "isoformat") else r.get("last_message_at"),
             "unread_count": r.get("unread_count") or 0,

@@ -104,6 +104,7 @@ def get_student_detail(
           u.id AS user_id,
           u.full_name,
           u.email,
+          u.profile_photo_url,
           u.timezone,
           u.created_at,
           u.updated_at,

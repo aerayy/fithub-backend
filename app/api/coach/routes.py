@@ -1135,6 +1135,7 @@ def get_all_students_from_subscriptions(
         SELECT
             u.id AS student_id,
             u.email,
+            u.profile_photo_url,
             COALESCE(o.full_name, u.email) AS full_name,
             c.goal_type,
             l.status,
@@ -1169,6 +1170,7 @@ def get_active_students_from_subscriptions(
         SELECT DISTINCT
             u.id AS student_id,
             u.email,
+            u.profile_photo_url,
             COALESCE(o.full_name, u.email) AS full_name,
             c.goal_type,
             s.ends_at,
@@ -1496,6 +1498,7 @@ def get_dashboard_summary(
         SELECT
             u.id AS student_id,
             COALESCE(o.full_name, u.email) AS full_name,
+            u.profile_photo_url,
             s.ends_at,
             EXTRACT(DAY FROM s.ends_at - NOW())::int AS days_left
         FROM subscriptions s
@@ -1513,7 +1516,8 @@ def get_dashboard_summary(
     cur.execute("""
         SELECT
             u.id AS student_id,
-            COALESCE(o.full_name, u.email) AS full_name
+            COALESCE(o.full_name, u.email) AS full_name,
+            u.profile_photo_url
         FROM clients c
         JOIN users u ON u.id = c.user_id
         LEFT JOIN client_onboarding o ON o.user_id = u.id
@@ -1539,6 +1543,7 @@ def get_dashboard_summary(
         SELECT
             u.id AS student_id,
             COALESCE(o.full_name, u.email) AS full_name,
+            u.profile_photo_url,
             'workout' AS missing_type
         FROM clients c
         JOIN users u ON u.id = c.user_id
@@ -1559,6 +1564,7 @@ def get_dashboard_summary(
         SELECT
             u.id AS student_id,
             COALESCE(o.full_name, u.email) AS full_name,
+            u.profile_photo_url,
             'nutrition' AS missing_type
         FROM clients c
         JOIN users u ON u.id = c.user_id
@@ -1659,6 +1665,7 @@ def get_dashboard_summary(
             s.id AS subscription_id,
             s.client_user_id AS student_id,
             COALESCE(o.full_name, u.full_name, u.email) AS student_name,
+            u.profile_photo_url AS student_photo,
             s.plan_name,
             s.status,
             s.purchased_at

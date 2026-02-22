@@ -79,6 +79,7 @@ def get_all_students_from_subscriptions(
         SELECT
             u.id AS student_id,
             u.email,
+            u.profile_photo_url,
             COALESCE(o.full_name, u.email) AS full_name,
             c.goal_type,
             l.status,
@@ -114,6 +115,7 @@ def get_active_students_from_subscriptions(
         SELECT
             u.id AS student_id,
             u.email,
+            u.profile_photo_url,
             COALESCE(o.full_name, u.email) AS full_name,
             c.goal_type,
             s.plan_name,
@@ -155,6 +157,7 @@ def get_new_purchases(
         s.id AS subscription_id,                -- ✅ KRİTİK
         s.client_user_id AS student_id,
         u.email,
+        u.profile_photo_url,
         COALESCE(o.full_name, u.email) AS full_name,
         c.goal_type,
         s.status,
