@@ -144,7 +144,13 @@ def get_coach_detail(
                 c.rating_count,
                 c.specialties,
                 c.instagram,
-                c.is_active
+                c.is_active,
+                c.title,
+                c.photos,
+                c.certificates,
+                c.twitter,
+                c.linkedin,
+                c.website
             FROM coaches c
             JOIN users u ON u.id = c.user_id
             WHERE c.user_id = %s AND c.is_active = TRUE
@@ -166,7 +172,9 @@ def get_coach_detail(
                 description,
                 duration_days,
                 price,
+                discount_percentage,
                 is_active,
+                services,
                 created_at,
                 updated_at
             FROM coach_packages
@@ -186,7 +194,9 @@ def get_coach_detail(
                 "description": p.get("description"),
                 "duration_days": p.get("duration_days"),
                 "price": float(p["price"]) if p.get("price") is not None else None,
+                "discount_percentage": float(p["discount_percentage"]) if p.get("discount_percentage") is not None else 0,
                 "is_active": p.get("is_active", True),
+                "services": p.get("services") or [],
                 "created_at": p["created_at"].isoformat() if p.get("created_at") else None,
                 "updated_at": p["updated_at"].isoformat() if p.get("updated_at") else None,
             })
@@ -202,6 +212,12 @@ def get_coach_detail(
             "specialties": coach_row.get("specialties") or [],
             "instagram": coach_row.get("instagram"),
             "is_active": coach_row.get("is_active", True),
+            "title": coach_row.get("title"),
+            "photos": coach_row.get("photos") or [],
+            "certificates": coach_row.get("certificates") or [],
+            "twitter": coach_row.get("twitter"),
+            "linkedin": coach_row.get("linkedin"),
+            "website": coach_row.get("website"),
         }
 
         return {

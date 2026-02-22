@@ -1202,7 +1202,7 @@ def get_my_profile(
     cur.execute(
         """
         SELECT c.user_id, c.bio, c.photo_url, c.price_per_month, c.rating, c.rating_count,
-               c.specialties, c.instagram, c.is_active, c.title, c.certificates, c.photos,
+               c.specialties, c.instagram, c.twitter, c.linkedin, c.website, c.is_active, c.title, c.certificates, c.photos,
                u.email, COALESCE(u.full_name, u.email) AS full_name
         FROM coaches c
         JOIN users u ON u.id = c.user_id
@@ -1260,7 +1260,7 @@ def update_my_profile(
         )
 
     # Update coaches table fields
-    allowed_fields = {"bio", "photo_url", "price_per_month", "specialties", "instagram", "is_active", "title", "certificates", "photos"}
+    allowed_fields = {"bio", "photo_url", "price_per_month", "specialties", "instagram", "twitter", "linkedin", "website", "is_active", "title", "certificates", "photos"}
     updates = {k: payload.get(k) for k in payload.keys() if k in allowed_fields}
 
     if updates:
@@ -1285,7 +1285,7 @@ def update_my_profile(
     cur.execute(
         """
         SELECT c.user_id, c.bio, c.photo_url, c.price_per_month, c.rating, c.rating_count,
-               c.specialties, c.instagram, c.is_active, c.title, c.certificates, c.photos,
+               c.specialties, c.instagram, c.twitter, c.linkedin, c.website, c.is_active, c.title, c.certificates, c.photos,
                u.email, COALESCE(u.full_name, u.email) AS full_name
         FROM coaches c
         JOIN users u ON u.id = c.user_id
@@ -1334,6 +1334,7 @@ class CoachPackageCreate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=2000)
     duration_days: int = Field(gt=0)
     price: int = Field(ge=0)
+    discount_percentage: float = Field(default=0, ge=0, le=100)
     is_active: bool = True
     services: Optional[List[str]] = Field(default=None, description="List of service tags (max 12, each max 40 chars)")
     
@@ -1348,6 +1349,7 @@ class CoachPackageUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=2000)
     duration_days: Optional[int] = Field(default=None, gt=0)
     price: Optional[int] = Field(default=None, ge=0)
+    discount_percentage: Optional[float] = Field(default=None, ge=0, le=100)
     is_active: Optional[bool] = None
     services: Optional[List[str]] = Field(default=None, description="List of service tags (max 12, each max 40 chars)")
     
@@ -1363,7 +1365,7 @@ def list_my_packages(db=Depends(get_db), current_user=Depends(require_role("coac
     try:
         cur.execute(
             """
-            SELECT id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+            SELECT id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, created_at, updated_at
             FROM coach_packages
             WHERE coach_user_id = %s
             ORDER BY is_active DESC, created_at DESC, id DESC
@@ -1382,11 +1384,11 @@ def create_package(body: CoachPackageCreate, db=Depends(get_db), current_user=De
     try:
         cur.execute(
             """
-            INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, is_active)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+            INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, created_at, updated_at
             """,
-            (current_user["id"], body.name, body.description, body.duration_days, body.price, body.is_active),
+            (current_user["id"], body.name, body.description, body.duration_days, body.price, body.discount_percentage, body.is_active, body.services),
         )
         row = cur.fetchone()
         db.commit()
@@ -1420,6 +1422,10 @@ def update_package(package_id: int, body: CoachPackageUpdate, db=Depends(get_db)
             fields.append("price=%s"); values.append(body.price)
         if body.is_active is not None:
             fields.append("is_active=%s"); values.append(body.is_active)
+        if body.discount_percentage is not None:
+            fields.append("discount_percentage=%s"); values.append(body.discount_percentage)
+        if body.services is not None:
+            fields.append("services=%s"); values.append(body.services)
 
         if not fields:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -1431,7 +1437,7 @@ def update_package(package_id: int, body: CoachPackageUpdate, db=Depends(get_db)
             UPDATE coach_packages
             SET {", ".join(fields)}
             WHERE id=%s AND coach_user_id=%s
-            RETURNING id, coach_user_id, name, description, duration_days, price, is_active, created_at, updated_at
+            RETURNING id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, created_at, updated_at
             """,
             tuple(values),
         )
