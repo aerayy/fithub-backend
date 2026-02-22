@@ -1647,6 +1647,25 @@ def get_dashboard_summary(
     """, (coach_id, coach_id, coach_id, coach_id))
     recent_activity = cur.fetchall()
 
+    # Recent purchases (all statuses, last 30 days)
+    cur.execute("""
+        SELECT
+            s.id AS subscription_id,
+            s.client_user_id AS student_id,
+            COALESCE(o.full_name, u.full_name, u.email) AS student_name,
+            s.plan_name,
+            s.status,
+            s.purchased_at
+        FROM subscriptions s
+        JOIN users u ON u.id = s.client_user_id
+        LEFT JOIN client_onboarding o ON o.user_id = u.id
+        WHERE s.coach_user_id = %s
+          AND s.purchased_at >= NOW() - INTERVAL '30 days'
+        ORDER BY s.purchased_at DESC
+        LIMIT 20
+    """, (coach_id,))
+    recent_purchases = cur.fetchall()
+
     # Serialize datetimes
     for item in recent_activity:
         if item.get("event_at") and hasattr(item["event_at"], "isoformat"):
@@ -1654,6 +1673,9 @@ def get_dashboard_summary(
     for item in ending_soon:
         if item.get("ends_at") and hasattr(item["ends_at"], "isoformat"):
             item["ends_at"] = item["ends_at"].isoformat()
+    for item in recent_purchases:
+        if item.get("purchased_at") and hasattr(item["purchased_at"], "isoformat"):
+            item["purchased_at"] = item["purchased_at"].isoformat()
 
     return {
         "coach_name": coach_name,
@@ -1671,4 +1693,5 @@ def get_dashboard_summary(
             "missing_nutrition": missing_nutrition,
         },
         "recent_activity": recent_activity,
+        "recent_purchases": recent_purchases,
     }
