@@ -12,20 +12,20 @@ from .routes import router
 logger = logging.getLogger(__name__)
 
 
-@router.get("/daily-challenge")
-def get_daily_challenge(
+@router.get("/weekly-challenge")
+def get_weekly_challenge(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
     user_id = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
 
-    # Check cache (valid for today)
+    # Check cache (valid for current week)
     cur.execute(
         """
         SELECT challenge_json, generated_at
         FROM client_challenge_cache
-        WHERE user_id = %s AND generated_at::date = CURRENT_DATE
+        WHERE user_id = %s AND generated_at >= date_trunc('week', CURRENT_TIMESTAMP)
         """,
         (user_id,),
     )
@@ -82,7 +82,7 @@ def get_daily_challenge(
             elif isinstance(body_focus, list):
                 body_focus_desc = f" Odak bölgeleri: {', '.join(str(v) for v in body_focus)}."
 
-        prompt = f"""Bir fitness uygulaması için kişiselleştirilmiş günlük challenge oluştur.
+        prompt = f"""Bir fitness uygulaması için kişiselleştirilmiş haftalık challenge oluştur.
 
 Kullanıcı Profili:
 - Yaş: {age}, Cinsiyet: {gender}
@@ -93,8 +93,8 @@ Kullanıcı Profili:
 
 Return ONLY valid JSON (no markdown):
 {{
-  "title": "Günün Challenge'ı",
-  "description": "Kısa ve net challenge açıklaması (1-2 cümle, Türkçe)",
+  "title": "Haftanın Challenge'ı",
+  "description": "Kısa ve net haftalık challenge açıklaması (1-2 cümle, Türkçe). Hafta boyunca yapılacak bir hedef olmalı.",
   "difficulty": "Kolay|Orta|Zor",
   "estimated_minutes": 10,
   "emoji": "⚡"
@@ -104,8 +104,8 @@ Rules:
 - Challenge kullanıcının seviyesine uygun olmalı (başlangıç=kolay, ileri=zor)
 - Antrenman yerine uygun olmalı (ev=ekipmansız, gym=ekipmanlı)
 - Diz ağrısı varsa diz dostu hareketler seç
-- Her gün farklı kas gruplarına odaklan
-- Süre 5-20 dakika arası olmalı
+- Her hafta farklı kas gruplarına odaklan
+- Haftalık toplam hedef olmalı (ör: "Bu hafta toplam 300 şınav tamamla", "Bu hafta 5 gün 10 dk plank yap")
 - Türkçe yaz
 - Emoji tek bir emoji olmalı"""
 
@@ -114,7 +114,7 @@ Rules:
             messages=[
                 {
                     "role": "system",
-                    "content": "Sen bir fitness challenge tasarımcısısın. Kişiye özel günlük egzersiz challenge'ları oluşturuyorsun. Sadece JSON formatında yanıt ver. Türkçe yaz.",
+                    "content": "Sen bir fitness challenge tasarımcısısın. Kişiye özel haftalık egzersiz challenge'ları oluşturuyorsun. Sadece JSON formatında yanıt ver. Türkçe yaz.",
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -139,7 +139,7 @@ Rules:
         )
         db.commit()
 
-        logger.info(f"Daily challenge generated for user_id={user_id}")
+        logger.info(f"Weekly challenge generated for user_id={user_id}")
         return result
 
     except json.JSONDecodeError as e:
