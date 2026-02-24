@@ -1725,7 +1725,8 @@ class CoachPackageCreate(BaseModel):
     discount_percentage: float = Field(default=0, ge=0, le=100)
     is_active: bool = True
     services: Optional[List[str]] = Field(default=None, description="List of service tags (max 12, each max 40 chars)")
-    
+    image_url: Optional[str] = Field(default=None, max_length=500)
+
     @field_validator('services')
     @classmethod
     def validate_services_field(cls, v):
@@ -1740,7 +1741,8 @@ class CoachPackageUpdate(BaseModel):
     discount_percentage: Optional[float] = Field(default=None, ge=0, le=100)
     is_active: Optional[bool] = None
     services: Optional[List[str]] = Field(default=None, description="List of service tags (max 12, each max 40 chars)")
-    
+    image_url: Optional[str] = Field(default=None, max_length=500)
+
     @field_validator('services')
     @classmethod
     def validate_services_field(cls, v):
@@ -1753,7 +1755,7 @@ def list_my_packages(db=Depends(get_db), current_user=Depends(require_role("coac
     try:
         cur.execute(
             """
-            SELECT id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, created_at, updated_at
+            SELECT id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, image_url, created_at, updated_at
             FROM coach_packages
             WHERE coach_user_id = %s
             ORDER BY is_active DESC, created_at DESC, id DESC
@@ -1772,11 +1774,11 @@ def create_package(body: CoachPackageCreate, db=Depends(get_db), current_user=De
     try:
         cur.execute(
             """
-            INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, created_at, updated_at
+            INSERT INTO coach_packages (coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, image_url)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, image_url, created_at, updated_at
             """,
-            (current_user["id"], body.name, body.description, body.duration_days, body.price, body.discount_percentage, body.is_active, body.services),
+            (current_user["id"], body.name, body.description, body.duration_days, body.price, body.discount_percentage, body.is_active, body.services, body.image_url),
         )
         row = cur.fetchone()
         db.commit()
@@ -1814,6 +1816,8 @@ def update_package(package_id: int, body: CoachPackageUpdate, db=Depends(get_db)
             fields.append("discount_percentage=%s"); values.append(body.discount_percentage)
         if body.services is not None:
             fields.append("services=%s"); values.append(body.services)
+        if body.image_url is not None:
+            fields.append("image_url=%s"); values.append(body.image_url)
 
         if not fields:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -1825,7 +1829,7 @@ def update_package(package_id: int, body: CoachPackageUpdate, db=Depends(get_db)
             UPDATE coach_packages
             SET {", ".join(fields)}
             WHERE id=%s AND coach_user_id=%s
-            RETURNING id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, created_at, updated_at
+            RETURNING id, coach_user_id, name, description, duration_days, price, discount_percentage, is_active, services, image_url, created_at, updated_at
             """,
             tuple(values),
         )

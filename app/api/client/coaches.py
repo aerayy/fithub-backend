@@ -175,6 +175,7 @@ def get_coach_detail(
                 discount_percentage,
                 is_active,
                 services,
+                image_url,
                 created_at,
                 updated_at
             FROM coach_packages
