@@ -29,7 +29,7 @@ def fetch_active_nutrition_program(client_user_id: int, db):
 
     cur.execute(
         """
-        SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at
+        SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at, supplements
         FROM nutrition_programs
         WHERE client_user_id = %s AND is_active = TRUE
         ORDER BY created_at DESC

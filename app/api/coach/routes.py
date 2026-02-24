@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
@@ -1049,8 +1049,184 @@ def save_nutrition_program(
             (nutrition_program_id, meal_type, content, idx),
         )
 
+    supplements = payload.get("supplements", [])
+    if supplements:
+        cur.execute(
+            "UPDATE nutrition_programs SET supplements = %s::jsonb WHERE id = %s",
+            (json.dumps(supplements), nutrition_program_id),
+        )
+
     db.commit()
     return {"ok": True, "nutrition_program_id": nutrition_program_id}
+
+
+@router.post("/students/{student_user_id}/nutrition-programs/generate")
+def generate_nutrition_program(
+    student_user_id: int,
+    payload: dict = Body(...),
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # 1. Verify student is assigned to this coach
+    cur.execute("SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s", (student_user_id, coach_id))
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış")
+
+    # 2. Get target macros from payload
+    target_calories = payload.get("target_calories")
+    target_protein = payload.get("target_protein")
+    target_carbs = payload.get("target_carbs")
+    target_fat = payload.get("target_fat")
+    if not all([target_calories, target_protein, target_carbs, target_fat]):
+        raise HTTPException(status_code=400, detail="Hedef makrolar gerekli (target_calories, target_protein, target_carbs, target_fat)")
+
+    # 3. Fetch onboarding data
+    cur.execute("""
+        SELECT co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
+               COALESCE(co.full_name, u.full_name, u.email) AS client_name
+        FROM client_onboarding co
+        JOIN users u ON u.id = co.user_id
+        WHERE co.user_id = %s
+        ORDER BY co.id DESC LIMIT 1
+    """, (student_user_id,))
+    onb = cur.fetchone()
+
+    age = onb.get("age", "bilinmiyor") if onb else "bilinmiyor"
+    weight = onb.get("weight_kg", "bilinmiyor") if onb else "bilinmiyor"
+    height = onb.get("height_cm", "bilinmiyor") if onb else "bilinmiyor"
+    gender = onb.get("gender", "bilinmiyor") if onb else "bilinmiyor"
+    goal = onb.get("your_goal", "genel sağlık") if onb else "genel sağlık"
+    client_name = onb.get("client_name", "Danışan") if onb else "Danışan"
+
+    # 4. Build prompt
+    prompt = f"""Generate a personalized daily nutrition program for a {age}-year-old {gender} client named {client_name}.
+
+Client Profile:
+- Weight: {weight} kg
+- Height: {height} cm
+- Goal: {goal}
+
+Target Daily Macros (MUST match as closely as possible):
+- Calories: {target_calories} kcal
+- Protein: {target_protein}g
+- Carbohydrates: {target_carbs}g
+- Fat: {target_fat}g
+
+Generate a daily meal plan in JSON format. Return ONLY valid JSON with this exact structure:
+{{
+  "meals": [
+    {{
+      "type": "Kahvaltı",
+      "time": "08:00",
+      "items": [
+        {{
+          "name_tr": "Yulaf Ezmesi",
+          "name_en": "Oatmeal",
+          "unit": "g",
+          "amount": 80,
+          "grams": 80,
+          "calories_per_100g": 389,
+          "protein_per_100g": 16.9,
+          "carbs_per_100g": 66.3,
+          "fat_per_100g": 6.9,
+          "calories": 311,
+          "protein": 14,
+          "carbs": 53,
+          "fat": 6
+        }}
+      ]
+    }}
+  ]
+}}
+
+Rules:
+- Use Turkish food names (name_tr) and English translations (name_en)
+- Include common Turkish foods: yulaf, yumurta, tavuk göğsü, bulgur, mercimek, peynir, tam buğday ekmek, pirinç, zeytinyağı, süt, yoğurt, muz, elma, badem, ceviz, ton balığı, somon, brokoli, ıspanak etc.
+- Each item MUST have per_100g macros AND calculated macros for the actual gram amount
+- The calculated macros = (per_100g values) * (grams / 100), rounded to integers
+- Meal types must be one of: "Kahvaltı", "Öğle Yemeği", "Akşam Yemeği", "Ara Öğün"
+- You can use 3-6 meals to hit the targets
+- Total daily macros MUST be within 5% of the targets
+- unit must be "g"
+- amount and grams must be the same value (in grams)
+- time should be realistic meal times like "07:30", "10:00", "12:30", "15:30", "19:00", "21:00"
+
+Return ONLY the JSON object, nothing else."""
+
+    # 5. Call OpenAI
+    from openai import OpenAI as _OpenAI
+
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+
+    try:
+        ai_client = _OpenAI(api_key=OPENAI_API_KEY)
+        response = ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a professional nutrition coach. Generate safe, balanced meal plans using Turkish foods in JSON format only."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+        )
+        result = json.loads(response.choices[0].message.content)
+        meals = result.get("meals", [])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI beslenme programı oluşturulamadı: {str(e)}")
+
+    if not meals:
+        raise HTTPException(status_code=500, detail="AI boş bir program döndürdü")
+
+    # 6. Save as draft (is_active=FALSE)
+    try:
+        # Check for existing draft
+        cur.execute("""
+            SELECT id FROM nutrition_programs
+            WHERE client_user_id = %s AND coach_user_id = %s AND is_active = FALSE
+            ORDER BY created_at DESC LIMIT 1
+        """, (student_user_id, coach_id))
+        existing = cur.fetchone()
+
+        if existing:
+            program_id = existing["id"]
+            cur.execute("DELETE FROM nutrition_meals WHERE nutrition_program_id = %s", (program_id,))
+            cur.execute("UPDATE nutrition_programs SET updated_at = NOW(), title = 'AI Beslenme Programı' WHERE id = %s", (program_id,))
+        else:
+            cur.execute("""
+                INSERT INTO nutrition_programs (client_user_id, coach_user_id, title, is_active, created_at, updated_at)
+                VALUES (%s, %s, 'AI Beslenme Programı', FALSE, NOW(), NOW())
+                RETURNING id
+            """, (student_user_id, coach_id))
+            row = cur.fetchone()
+            program_id = row["id"] if isinstance(row, dict) else row[0]
+
+        # Insert meals
+        for idx, meal in enumerate(meals, start=1):
+            meal_type = meal.get("type", "Öğün")
+            items = meal.get("items", [])
+            content = json.dumps(items)
+            planned_time = meal.get("time")
+            cur.execute("""
+                INSERT INTO nutrition_meals (nutrition_program_id, meal_type, content, order_index, planned_time, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+            """, (program_id, meal_type, content, idx, planned_time))
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Program kaydedilemedi: {str(e)}")
+
+    # 7. Return response
+    week_meals = [{"type": m.get("type"), "time": m.get("time", ""), "items": m.get("items", [])} for m in meals]
+    return {
+        "program_id": program_id,
+        "generated_by": "ai",
+        "week": {d: week_meals for d in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}
+    }
 
 
 # --------------------------------------------------
