@@ -1037,7 +1037,7 @@ def save_nutrition_program(
     day_meals = day_meals or []
 
     for idx, m in enumerate(day_meals, start=1):
-        meal_type = m.get("type") or "Meal"
+        meal_type = f"{idx}. Öğün"
         items = m.get("items") or []
         content = json.dumps(items)
 
@@ -1119,7 +1119,7 @@ Generate a daily meal plan in JSON format. Return ONLY valid JSON with this exac
 {{
   "meals": [
     {{
-      "type": "Kahvaltı",
+      "type": "1. Öğün",
       "time": "08:00",
       "items": [
         {{
@@ -1147,7 +1147,7 @@ Rules:
 - Include common Turkish foods: yulaf, yumurta, tavuk göğsü, bulgur, mercimek, peynir, tam buğday ekmek, pirinç, zeytinyağı, süt, yoğurt, muz, elma, badem, ceviz, ton balığı, somon, brokoli, ıspanak etc.
 - Each item MUST have per_100g macros AND calculated macros for the actual gram amount
 - The calculated macros = (per_100g values) * (grams / 100), rounded to integers
-- Meal types must be one of: "Kahvaltı", "Öğle Yemeği", "Akşam Yemeği", "Ara Öğün"
+- Meal types MUST be numbered sequentially: "1. Öğün", "2. Öğün", "3. Öğün", "4. Öğün", "5. Öğün", "6. Öğün"
 - You can use 3-6 meals to hit the targets
 - Total daily macros MUST be within 5% of the targets
 - unit must be "g"
@@ -1204,9 +1204,9 @@ Return ONLY the JSON object, nothing else."""
             row = cur.fetchone()
             program_id = row["id"] if isinstance(row, dict) else row[0]
 
-        # Insert meals
+        # Insert meals with numbered type
         for idx, meal in enumerate(meals, start=1):
-            meal_type = meal.get("type", "Öğün")
+            meal_type = f"{idx}. Öğün"
             items = meal.get("items", [])
             content = json.dumps(items)
             planned_time = meal.get("time")
@@ -1220,8 +1220,8 @@ Return ONLY the JSON object, nothing else."""
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Program kaydedilemedi: {str(e)}")
 
-    # 7. Return response
-    week_meals = [{"type": m.get("type"), "time": m.get("time", ""), "items": m.get("items", [])} for m in meals]
+    # 7. Return response (numbered meal types)
+    week_meals = [{"type": f"{i}. Öğün", "time": m.get("time", ""), "items": m.get("items", [])} for i, m in enumerate(meals, start=1)]
     return {
         "program_id": program_id,
         "generated_by": "ai",
