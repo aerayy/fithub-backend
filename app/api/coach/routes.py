@@ -1229,6 +1229,181 @@ Return ONLY the JSON object, nothing else."""
     }
 
 
+@router.get("/students/{student_user_id}/nutrition-programs/latest")
+def get_latest_nutrition_program(
+    student_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Get the latest saved nutrition program for a student.
+    Returns UI-friendly structure with week (all days share the same meals).
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    # Get latest nutrition program
+    cur.execute(
+        """
+        SELECT id, client_user_id, coach_user_id, title, is_active, supplements, created_at, updated_at
+        FROM nutrition_programs
+        WHERE client_user_id = %s AND coach_user_id = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (student_user_id, coach_id),
+    )
+    program = cur.fetchone()
+
+    if not program:
+        raise HTTPException(status_code=404, detail="Nutrition program not found")
+
+    program_id = program["id"]
+    is_active = bool(program["is_active"])
+    title = program.get("title") or ""
+    generated_by = "ai" if "AI" in title else None
+    supplements = program.get("supplements") or []
+
+    # Get all meals for this program
+    cur.execute(
+        """
+        SELECT id, meal_type, content, order_index, planned_time
+        FROM nutrition_meals
+        WHERE nutrition_program_id = %s
+        ORDER BY order_index ASC, id ASC
+        """,
+        (program_id,),
+    )
+    meals_rows = cur.fetchall() or []
+
+    # Build meals list
+    meals = []
+    for m in meals_rows:
+        raw_content = m.get("content") or "[]"
+        if isinstance(raw_content, str):
+            try:
+                items = json.loads(raw_content)
+            except (json.JSONDecodeError, TypeError):
+                items = []
+        else:
+            items = raw_content
+        meals.append({
+            "type": m.get("meal_type") or "",
+            "time": m.get("planned_time") or "",
+            "items": items,
+        })
+
+    # All days share the same meals
+    week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    week = {day: meals for day in week_days}
+
+    return {
+        "program_id": program_id,
+        "is_active": is_active,
+        "generated_by": generated_by,
+        "supplements": supplements,
+        "week": week,
+    }
+
+
+@router.delete("/students/{student_user_id}/workout-programs/{program_id}")
+def delete_workout_program(
+    student_user_id: int,
+    program_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Delete a workout program and all its associated days and exercises.
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    # Get day ids for this program
+    cur.execute(
+        "SELECT id FROM workout_days WHERE workout_program_id = %s",
+        (program_id,),
+    )
+    day_rows = cur.fetchall() or []
+    day_ids = [d["id"] for d in day_rows]
+
+    # Delete exercises for those days
+    if day_ids:
+        placeholders = ",".join(["%s"] * len(day_ids))
+        cur.execute(
+            f"DELETE FROM workout_exercises WHERE workout_day_id IN ({placeholders})",
+            tuple(day_ids),
+        )
+
+    # Delete days
+    cur.execute(
+        "DELETE FROM workout_days WHERE workout_program_id = %s",
+        (program_id,),
+    )
+
+    # Delete program
+    cur.execute(
+        "DELETE FROM workout_programs WHERE id = %s",
+        (program_id,),
+    )
+
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/students/{student_user_id}/nutrition-programs/{program_id}")
+def delete_nutrition_program(
+    student_user_id: int,
+    program_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Delete a nutrition program and all its associated meals.
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    # Delete meals
+    cur.execute(
+        "DELETE FROM nutrition_meals WHERE nutrition_program_id = %s",
+        (program_id,),
+    )
+
+    # Delete program
+    cur.execute(
+        "DELETE FROM nutrition_programs WHERE id = %s",
+        (program_id,),
+    )
+
+    db.commit()
+    return {"ok": True}
+
+
 # --------------------------------------------------
 # STUDENTS FILTERS
 # --------------------------------------------------
