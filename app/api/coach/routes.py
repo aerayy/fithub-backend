@@ -1033,21 +1033,24 @@ def save_nutrition_program(
     nutrition_program_id = _fetchone_id(cur.fetchone())
 
     week = payload.get("week", {}) or {}
-    day_meals = week.get("mon") or next((week[k] for k in ["tue", "wed", "thu", "fri", "sat", "sun"] if week.get(k)), [])
-    day_meals = day_meals or []
+    week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    order_counter = 0
 
-    for idx, m in enumerate(day_meals, start=1):
-        meal_type = f"{idx}. Öğün"
-        items = m.get("items") or []
-        content = json.dumps(items)
+    for day_key in week_days:
+        day_meals = week.get(day_key) or []
+        for idx, m in enumerate(day_meals, start=1):
+            order_counter += 1
+            meal_type = f"{day_key}:{idx}. Öğün"
+            items = m.get("items") or []
+            content = json.dumps(items)
 
-        cur.execute(
-            """
-            INSERT INTO nutrition_meals (nutrition_program_id, meal_type, content, order_index)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (nutrition_program_id, meal_type, content, idx),
-        )
+            cur.execute(
+                """
+                INSERT INTO nutrition_meals (nutrition_program_id, meal_type, content, order_index)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (nutrition_program_id, meal_type, content, order_counter),
+            )
 
     supplements = payload.get("supplements", [])
     if supplements:
@@ -1101,60 +1104,71 @@ def generate_nutrition_program(
     goal = onb.get("your_goal", "genel sağlık") if onb else "genel sağlık"
     client_name = onb.get("client_name", "Danışan") if onb else "Danışan"
 
-    # 4. Build prompt
-    prompt = f"""Generate a personalized daily nutrition program for a {age}-year-old {gender} client named {client_name}.
+    # 4. Build prompt — Türk fitness koçu tarzında, haftalık plan, her gün farklı
+    day_labels_tr = {
+        "mon": "Pazartesi", "tue": "Salı", "wed": "Çarşamba",
+        "thu": "Perşembe", "fri": "Cuma", "sat": "Cumartesi", "sun": "Pazar"
+    }
 
-Client Profile:
-- Weight: {weight} kg
-- Height: {height} cm
-- Goal: {goal}
+    prompt = f"""Sen Türkiye'de çalışan profesyonel bir fitness koçusun. Danışanın için haftalık beslenme programı hazırlaman gerekiyor.
 
-Target Daily Macros (MUST match as closely as possible):
-- Calories: {target_calories} kcal
+Danışan Bilgileri:
+- İsim: {client_name}
+- Yaş: {age}
+- Cinsiyet: {gender}
+- Kilo: {weight} kg
+- Boy: {height} cm
+- Hedef: {goal}
+
+Günlük Hedef Makrolar (her gün bu değerlere yakın olmalı):
+- Kalori: {target_calories} kcal
 - Protein: {target_protein}g
-- Carbohydrates: {target_carbs}g
-- Fat: {target_fat}g
+- Karbonhidrat: {target_carbs}g
+- Yağ: {target_fat}g
 
-Generate a daily meal plan in JSON format. Return ONLY valid JSON with this exact structure:
+7 günlük (Pazartesi-Pazar) beslenme programı oluştur. Her gün farklı yemekler olsun, tekrar eden monoton bir liste olmasın. Türk mutfağına uygun, gerçekçi ve uygulanabilir yemekler seç.
+
+JSON formatında döndür. Yapı şu şekilde olmalı:
 {{
-  "meals": [
-    {{
-      "type": "1. Öğün",
-      "time": "08:00",
-      "items": [
+  "week": {{
+    "mon": {{
+      "meals": [
         {{
-          "name_tr": "Yulaf Ezmesi",
-          "name_en": "Oatmeal",
-          "unit": "g",
-          "amount": 80,
-          "grams": 80,
-          "calories_per_100g": 389,
-          "protein_per_100g": 16.9,
-          "carbs_per_100g": 66.3,
-          "fat_per_100g": 6.9,
-          "calories": 311,
-          "protein": 14,
-          "carbs": 53,
-          "fat": 6
+          "type": "1. Öğün",
+          "time": "08:00",
+          "items": [
+            {{
+              "name_tr": "Yulaf Ezmesi",
+              "name_en": "Oatmeal",
+              "grams": 80,
+              "calories": 311,
+              "protein": 14,
+              "carbs": 53,
+              "fat": 6
+            }}
+          ]
         }}
       ]
-    }}
-  ]
+    }},
+    "tue": {{ ... }},
+    "wed": {{ ... }},
+    "thu": {{ ... }},
+    "fri": {{ ... }},
+    "sat": {{ ... }},
+    "sun": {{ ... }}
+  }}
 }}
 
-Rules:
-- Use Turkish food names (name_tr) and English translations (name_en)
-- Include common Turkish foods: yulaf, yumurta, tavuk göğsü, bulgur, mercimek, peynir, tam buğday ekmek, pirinç, zeytinyağı, süt, yoğurt, muz, elma, badem, ceviz, ton balığı, somon, brokoli, ıspanak etc.
-- Each item MUST have per_100g macros AND calculated macros for the actual gram amount
-- The calculated macros = (per_100g values) * (grams / 100), rounded to integers
-- Meal types MUST be numbered sequentially: "1. Öğün", "2. Öğün", "3. Öğün", "4. Öğün", "5. Öğün", "6. Öğün"
-- You can use 3-6 meals to hit the targets
-- Total daily macros MUST be within 5% of the targets
-- unit must be "g"
-- amount and grams must be the same value (in grams)
-- time should be realistic meal times like "07:30", "10:00", "12:30", "15:30", "19:00", "21:00"
+Kurallar:
+- Her gün 4-6 öğün olsun, öğünler "1. Öğün", "2. Öğün", "3. Öğün" şeklinde numaralandırılsın
+- Her günün toplam makroları hedef değerlere %5 sapma ile uymalı
+- Türk mutfağı ağırlıklı ol: yumurta, peynir, zeytin, domates, salatalık, tam buğday ekmek, yulaf, tavuk göğsü, kıyma, köfte, mercimek çorbası, bulgur pilavı, makarna, pirinç pilavı, kuru fasulye, nohut, ton balığı, somon, yoğurt, ayran, süt, muz, elma, ceviz, badem, fıstık ezmesi, zeytinyağı, avokado, brokoli, ıspanak, havuç, patates, tatlı patates vs.
+- Günler arası çeşitlilik sağla, aynı ana yemeği üst üste koyma
+- Her item'da grams, calories, protein, carbs, fat değerleri olsun (hesaplanmış, gram bazında)
+- time alanı gerçekçi saatler olsun: "07:30", "10:00", "12:30", "15:30", "19:00", "21:00" gibi
+- Pratik ve hazırlanması kolay yemekler tercih et
 
-Return ONLY the JSON object, nothing else."""
+Sadece JSON döndür, başka bir şey yazma."""
 
     # 5. Call OpenAI
     from openai import OpenAI as _OpenAI
@@ -1167,18 +1181,18 @@ Return ONLY the JSON object, nothing else."""
         response = ai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a professional nutrition coach. Generate safe, balanced meal plans using Turkish foods in JSON format only."},
+                {"role": "system", "content": "Sen Türkiye'de çalışan deneyimli bir fitness ve beslenme koçusun. Danışanlarına Türk mutfağına uygun, pratik ve makro hedeflerine uyan haftalık beslenme programları hazırlıyorsun. Sadece JSON formatında yanıt ver."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.7,
+            temperature=0.8,
         )
         result = json.loads(response.choices[0].message.content)
-        meals = result.get("meals", [])
+        week_data = result.get("week", {})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI beslenme programı oluşturulamadı: {str(e)}")
 
-    if not meals:
+    if not week_data:
         raise HTTPException(status_code=500, detail="AI boş bir program döndürdü")
 
     # 6. Save as draft (is_active=FALSE)
@@ -1204,28 +1218,42 @@ Return ONLY the JSON object, nothing else."""
             row = cur.fetchone()
             program_id = row["id"] if isinstance(row, dict) else row[0]
 
-        # Insert meals with numbered type
-        for idx, meal in enumerate(meals, start=1):
-            meal_type = f"{idx}. Öğün"
-            items = meal.get("items", [])
-            content = json.dumps(items)
-            planned_time = meal.get("time")
-            cur.execute("""
-                INSERT INTO nutrition_meals (nutrition_program_id, meal_type, content, order_index, planned_time, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-            """, (program_id, meal_type, content, idx, planned_time))
+        # Insert meals per day — day_key stored in meal_type as "mon:1. Öğün"
+        week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        order_counter = 0
+        for day_key in week_days:
+            day_data = week_data.get(day_key, {})
+            day_meals = day_data.get("meals", []) if isinstance(day_data, dict) else []
+            for idx, meal in enumerate(day_meals, start=1):
+                order_counter += 1
+                meal_type = f"{day_key}:{idx}. Öğün"
+                items = meal.get("items", [])
+                content = json.dumps(items)
+                planned_time = meal.get("time")
+                cur.execute("""
+                    INSERT INTO nutrition_meals (nutrition_program_id, meal_type, content, order_index, planned_time, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                """, (program_id, meal_type, content, order_counter, planned_time))
 
         db.commit()
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Program kaydedilemedi: {str(e)}")
 
-    # 7. Return response (numbered meal types)
-    week_meals = [{"type": f"{i}. Öğün", "time": m.get("time", ""), "items": m.get("items", [])} for i, m in enumerate(meals, start=1)]
+    # 7. Build response — week with per-day meals
+    response_week = {}
+    for day_key in week_days:
+        day_data = week_data.get(day_key, {})
+        day_meals = day_data.get("meals", []) if isinstance(day_data, dict) else []
+        response_week[day_key] = [
+            {"type": f"{i}. Öğün", "time": m.get("time", ""), "items": m.get("items", [])}
+            for i, m in enumerate(day_meals, start=1)
+        ]
+
     return {
         "program_id": program_id,
         "generated_by": "ai",
-        "week": {d: week_meals for d in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}
+        "week": response_week
     }
 
 
@@ -1284,8 +1312,10 @@ def get_latest_nutrition_program(
     )
     meals_rows = cur.fetchall() or []
 
-    # Build meals list
-    meals = []
+    # Build meals per day
+    week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    week = {day: [] for day in week_days}
+
     for m in meals_rows:
         raw_content = m.get("content") or "[]"
         if isinstance(raw_content, str):
@@ -1295,15 +1325,20 @@ def get_latest_nutrition_program(
                 items = []
         else:
             items = raw_content
-        meals.append({
-            "type": m.get("meal_type") or "",
-            "time": m.get("planned_time") or "",
-            "items": items,
-        })
 
-    # All days share the same meals
-    week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-    week = {day: meals for day in week_days}
+        meal_type_raw = m.get("meal_type") or ""
+        planned_time = m.get("planned_time") or ""
+
+        # Parse "day_key:meal_type" format (e.g. "mon:1. Öğün")
+        if ":" in meal_type_raw:
+            day_key, meal_type = meal_type_raw.split(":", 1)
+            if day_key in week:
+                week[day_key].append({"type": meal_type, "time": planned_time, "items": items})
+        else:
+            # Legacy format — assign to all days
+            meal_obj = {"type": meal_type_raw, "time": planned_time, "items": items}
+            for day in week_days:
+                week[day].append(meal_obj)
 
     return {
         "program_id": program_id,
