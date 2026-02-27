@@ -219,3 +219,63 @@ def get_active_workout_for_client(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.get("/cardio/active")
+def get_active_cardio_for_client(
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """
+    Get active cardio program for the authenticated client.
+    Returns:
+    {
+        "program": { "id", "title", "created_at" } or null,
+        "sessions": [...]
+    }
+    """
+    client_user_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    try:
+        # Fetch active cardio program
+        cur.execute(
+            """
+            SELECT id, title, created_at
+            FROM cardio_programs
+            WHERE client_user_id=%s AND is_active=TRUE
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (client_user_id,),
+        )
+        program = cur.fetchone()
+
+        if not program:
+            return {"program": None, "sessions": []}
+
+        program_id = program["id"]
+
+        # Fetch sessions for this program
+        cur.execute(
+            """
+            SELECT id, cardio_program_id, day_of_week, cardio_type, duration_min, notes, order_index, created_at
+            FROM cardio_sessions
+            WHERE cardio_program_id=%s
+            ORDER BY order_index ASC, id ASC
+            """,
+            (program_id,),
+        )
+        sessions = cur.fetchall() or []
+
+        return {
+            "program": {
+                "id": program["id"],
+                "title": program.get("title") or "",
+                "created_at": program.get("created_at"),
+            },
+            "sessions": sessions,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

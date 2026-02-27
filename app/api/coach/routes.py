@@ -181,12 +181,41 @@ def get_active_programs(
         )
         meals = cur.fetchall()
 
+    # cardio program
+    cur.execute(
+        """
+        SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at
+        FROM cardio_programs
+        WHERE client_user_id=%s AND is_active=TRUE
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (student_user_id,),
+    )
+    cardio_program = cur.fetchone()
+
+    cardio_sessions = []
+    if cardio_program:
+        cardio_program_id = cardio_program["id"]
+        cur.execute(
+            """
+            SELECT id, cardio_program_id, day_of_week, cardio_type, duration_min, notes, order_index, created_at
+            FROM cardio_sessions
+            WHERE cardio_program_id=%s
+            ORDER BY order_index ASC, id ASC
+            """,
+            (cardio_program_id,),
+        )
+        cardio_sessions = cur.fetchall()
+
     return {
         "workout_program": workout_program,
         "workout_days": workout_days,
         "workout_exercises": workout_exercises,
         "nutrition_program": nutrition_program,
         "meals": meals,
+        "cardio_program": cardio_program,
+        "cardio_sessions": cardio_sessions,
     }
 
 
@@ -2098,3 +2127,223 @@ def get_dashboard_summary(
         "recent_activity": recent_activity,
         "recent_purchases": recent_purchases,
     }
+
+
+# --------------------------------------------------
+# CARDIO PROGRAM SAVE (DRAFT)
+# --------------------------------------------------
+@router.post("/students/{student_user_id}/cardio-programs")
+def save_cardio_program(
+    student_user_id: int,
+    payload: dict,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    try:
+        # Create program as DRAFT (is_active=FALSE)
+        cur.execute(
+            """
+            INSERT INTO cardio_programs (client_user_id, coach_user_id, title, is_active)
+            VALUES (%s, %s, %s, FALSE)
+            RETURNING id
+            """,
+            (student_user_id, coach_id, "Coach Cardio Program"),
+        )
+        program_id = _fetchone_id(cur.fetchone())
+
+        sessions = payload.get("sessions", []) or []
+        for idx, session in enumerate(sessions, start=1):
+            if not isinstance(session, dict):
+                continue
+            cur.execute(
+                """
+                INSERT INTO cardio_sessions
+                (cardio_program_id, day_of_week, cardio_type, duration_min, notes, order_index)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    program_id,
+                    session.get("day_of_week") or "",
+                    session.get("cardio_type") or "",
+                    session.get("duration_min"),
+                    session.get("notes") or "",
+                    idx,
+                ),
+            )
+
+        db.commit()
+        return {"program_id": program_id, "message": "Kardiyo programı kaydedildi"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error saving cardio program: {str(e)}")
+
+
+@router.get("/students/{student_user_id}/cardio-programs/latest")
+def get_latest_cardio_program(
+    student_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Get the latest cardio program for a student (draft or active).
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    # Get latest cardio program
+    cur.execute(
+        """
+        SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at
+        FROM cardio_programs
+        WHERE client_user_id=%s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (student_user_id,),
+    )
+    program = cur.fetchone()
+
+    if not program:
+        return {"program_id": None, "sessions": []}
+
+    program_id = program["id"]
+
+    # Get sessions for this program
+    cur.execute(
+        """
+        SELECT id, cardio_program_id, day_of_week, cardio_type, duration_min, notes, order_index, created_at
+        FROM cardio_sessions
+        WHERE cardio_program_id=%s
+        ORDER BY order_index ASC, id ASC
+        """,
+        (program_id,),
+    )
+    sessions = cur.fetchall() or []
+
+    return {
+        "program_id": program_id,
+        "is_active": bool(program["is_active"]),
+        "sessions": sessions,
+    }
+
+
+@router.post("/students/{student_user_id}/cardio-programs/assign")
+def assign_latest_cardio_program(
+    student_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Activate the latest cardio program for a student.
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    try:
+        # Find latest cardio program for this student
+        cur.execute(
+            """
+            SELECT id FROM cardio_programs
+            WHERE client_user_id=%s
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (student_user_id,),
+        )
+        program = cur.fetchone()
+
+        if not program:
+            raise HTTPException(status_code=404, detail="Cardio program not found")
+
+        program_id = program["id"]
+
+        # Deactivate all cardio programs for this student
+        cur.execute(
+            """
+            UPDATE cardio_programs
+            SET is_active = FALSE, updated_at = NOW()
+            WHERE client_user_id = %s AND is_active = TRUE
+            """,
+            (student_user_id,),
+        )
+
+        # Activate the latest one
+        cur.execute(
+            """
+            UPDATE cardio_programs
+            SET is_active = TRUE, updated_at = NOW()
+            WHERE id = %s
+            """,
+            (program_id,),
+        )
+
+        db.commit()
+        return {"message": "Kardiyo programı atandı"}
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error assigning cardio program: {str(e)}")
+
+
+@router.delete("/students/{student_user_id}/cardio-programs/{program_id}")
+def delete_cardio_program(
+    student_user_id: int,
+    program_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """
+    Delete a cardio program (sessions cascade via FK).
+    """
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Verify student is assigned to this coach
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    cur.execute(
+        """
+        DELETE FROM cardio_programs
+        WHERE id=%s AND client_user_id=(SELECT user_id FROM clients WHERE user_id=%s)
+        """,
+        (program_id, student_user_id),
+    )
+
+    db.commit()
+    return {"message": "Kardiyo programı silindi"}
