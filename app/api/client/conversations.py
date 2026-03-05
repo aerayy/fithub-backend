@@ -86,6 +86,7 @@ def list_client_conversations(
             c.id,
             c.coach_user_id,
             COALESCE(u.full_name, u.email) AS coach_name,
+            u.profile_photo_url AS coach_photo_url,
             (SELECT CASE WHEN message_type = 'image' THEN '[Foto]' ELSE body END FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_preview,
             (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_at,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'coach' AND m.read_at IS NULL) AS unread_count
@@ -121,6 +122,7 @@ def list_client_conversations(
                         c.id,
                         c.coach_user_id,
                         COALESCE(u.full_name, u.email) AS coach_name,
+                        u.profile_photo_url AS coach_photo_url,
                         NULL AS last_message_preview,
                         NULL AS last_message_at,
                         0 AS unread_count
@@ -139,6 +141,7 @@ def list_client_conversations(
             "id": r["id"],
             "coach_user_id": r["coach_user_id"],
             "coach_name": r["coach_name"],
+            "coach_photo_url": r.get("coach_photo_url"),
             "last_message_preview": (r["last_message_preview"] or "")[:100] if r.get("last_message_preview") else None,
             "last_message_at": r["last_message_at"].isoformat() if r.get("last_message_at") and hasattr(r["last_message_at"], "isoformat") else r.get("last_message_at"),
             "unread_count": r.get("unread_count") or 0,

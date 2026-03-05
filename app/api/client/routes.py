@@ -59,3 +59,8 @@ try:
     from . import challenge  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import notifications  # noqa: F401
+except Exception:
+    pass

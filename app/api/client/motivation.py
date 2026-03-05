@@ -86,7 +86,7 @@ def get_daily_motivation(
         if knee_pain:
             injury_note = " Müşterinin diz ağrısı var, bunu dikkate al."
 
-        prompt = f"""Bir fitness koçu olarak günlük motivasyon mesajı yaz.
+        prompt = f"""Günlük motivasyon alıntısı üret.
 
 Koç Adı: {coach_name}
 Müşteri Adı: {client_name}
@@ -96,23 +96,21 @@ Müşteri Profili:
 - Stres seviyesi: {stress}
 {injury_note}
 
-Koçun ağzından, müşteriye özel kısa ve motive edici bir günlük mesaj yaz.
-Mesaj samimi, enerjik ve kişiselleştirilmiş olmalı.
-Müşterinin hedefine ve durumuna referans ver.
+Güç, fitness, başarı, istikrar ve disiplin temalarından birini seç ve kısa, etkileyici bir alıntı yaz.
+Alıntı ünlü sporculardan, düşünürlerden olabilir veya orijinal olabilir.
 
 Return ONLY valid JSON (no markdown):
 {{
   "coach_name": "{coach_name}",
-  "message": "Motivasyon mesajı burada (2-3 cümle, Türkçe)",
+  "message": "Alıntı burada (1-2 cümle, Türkçe, güçlü ve ilham verici)",
   "emoji": "uygun bir emoji"
 }}
 
 Rules:
-- Mesaj 2-3 cümle olmalı
-- Müşterinin adını kullan
-- Koçun samimi tonunda yaz
+- Kısa ve güçlü olsun (1-2 cümle)
+- Temalar: güç, disiplin, istikrar, başarı, azim, fitness
 - Türkçe yaz
-- Emoji sadece tek bir emoji olmalı (💪, 🔥, ⚡, 🏋️, 🎯 gibi)"""
+- Emoji sadece tek bir emoji olmalı"""
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
