@@ -52,7 +52,7 @@ def fetch_active_program_with_payload(client_user_id: int, db):
         cur.execute(
             f"""
             SELECT we.id, we.workout_day_id, we.exercise_name, we.sets, we.reps,
-                   we.notes, we.order_index, el.gif_url
+                   we.notes, we.order_index, we.exercise_library_id, el.gif_url
             FROM workout_exercises we
             LEFT JOIN exercise_library el ON el.id = we.exercise_library_id
             WHERE we.workout_day_id IN ({placeholders})
@@ -91,6 +91,8 @@ def build_day_payload_from_flat_exercises(exercises: List[Dict], program_title: 
         }
         if ex.get("gif_url"):
             item["gif_url"] = ex["gif_url"]
+        if ex.get("exercise_library_id"):
+            item["library_id"] = ex["exercise_library_id"]
         exercise_items.append(item)
 
     return {
@@ -112,24 +114,30 @@ def build_day_payload_from_flat_exercises(exercises: List[Dict], program_title: 
 
 def _inject_gif_urls(payload: Dict, exercises: List[Dict]) -> Dict:
     """
-    Inject gif_url from exercise records into day_payload items by matching exercise name.
+    Inject gif_url and library_id from exercise records into day_payload items by matching exercise name.
     """
-    # Build name -> gif_url lookup from exercises
-    gif_lookup = {}
+    # Build name -> {gif_url, library_id} lookup from exercises
+    lookup = {}
     for ex in exercises:
         name = (ex.get("exercise_name") or "").strip().lower()
-        gif = ex.get("gif_url")
-        if name and gif:
-            gif_lookup[name] = gif
+        if name:
+            lookup[name] = {
+                "gif_url": ex.get("gif_url"),
+                "library_id": ex.get("exercise_library_id"),
+            }
 
-    if not gif_lookup:
+    if not lookup:
         return payload
 
     for block in payload.get("blocks", []):
         for item in block.get("items", []):
             name = (item.get("name") or "").strip().lower()
-            if name and name in gif_lookup and "gif_url" not in item:
-                item["gif_url"] = gif_lookup[name]
+            if name and name in lookup:
+                data = lookup[name]
+                if data["gif_url"] and "gif_url" not in item:
+                    item["gif_url"] = data["gif_url"]
+                if data["library_id"] and "library_id" not in item:
+                    item["library_id"] = data["library_id"]
 
     return payload
 
