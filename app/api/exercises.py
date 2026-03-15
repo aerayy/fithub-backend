@@ -77,6 +77,8 @@ def get_exercise_detail(
             primary_muscles,
             secondary_muscles,
             instructions,
+            instructions_tr,
+            tips,
             image_urls,
             gif_url
         FROM exercise_library
@@ -101,6 +103,8 @@ def get_exercise_detail(
                 primary_muscles,
                 secondary_muscles,
                 instructions,
+                instructions_tr,
+                tips,
                 image_urls,
                 gif_url
             FROM exercise_library
