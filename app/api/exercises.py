@@ -112,9 +112,16 @@ def get_exercise_detail(
                OR (aliases IS NOT NULL AND EXISTS (
                    SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s
                ))
+            ORDER BY
+                CASE
+                    WHEN canonical_name ILIKE %s THEN 0
+                    WHEN canonical_name ILIKE %s THEN 1
+                    ELSE 2
+                END,
+                length(canonical_name) ASC
             LIMIT 1
             """,
-            (f"%{name}%", f"%{name}%"),
+            (f"%{name}%", f"%{name}%", name, f"{name}%"),
         )
         row = cur.fetchone()
 
