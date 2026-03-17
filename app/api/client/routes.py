@@ -64,3 +64,8 @@ try:
     from . import notifications  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import fcm  # noqa: F401
+except Exception:
+    pass

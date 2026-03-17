@@ -923,6 +923,14 @@ def assign_latest_workout_program(
         )
 
         db.commit()
+
+        # Send push notification
+        try:
+            from app.services.push_notification import notify_program_assigned
+            notify_program_assigned(student_user_id, "workout")
+        except Exception:
+            pass  # Don't fail the API call if notification fails
+
         return {"ok": True, "program_id": program_id}
 
     except HTTPException:

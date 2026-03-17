@@ -243,6 +243,21 @@ def send_coach_message(
     )
     row = cur.fetchone()
     db.commit()
+
+    # Send push notification to client
+    try:
+        from psycopg2.extras import RealDictCursor
+        cur2 = db.cursor(cursor_factory=RealDictCursor)
+        cur2.execute("SELECT client_user_id FROM conversations WHERE id = %s", (conversation_id,))
+        conv = cur2.fetchone()
+        if conv:
+            coach_name = current_user.get("full_name") or current_user.get("name") or "Kocunuz"
+            preview = body.body or "Yeni bir mesaj"
+            from app.services.push_notification import notify_new_message
+            notify_new_message(conv["client_user_id"], coach_name, preview)
+    except Exception:
+        pass
+
     return {
         "id": row["id"],
         "sender_type": row["sender_type"],
