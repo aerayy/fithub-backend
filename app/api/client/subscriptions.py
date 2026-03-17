@@ -13,7 +13,7 @@ def cancel_subscription(
 ):
     """
     Cancel the client's active subscription.
-    Sets status to 'cancelled', keeps access until ends_at.
+    Sets status to 'canceled', keeps access until ends_at.
     """
     try:
         client_user_id = current_user["id"]
@@ -40,7 +40,7 @@ def cancel_subscription(
 
         # Cancel subscription
         cur.execute(
-            "UPDATE subscriptions SET status = 'cancelled', updated_at = NOW() WHERE id = %s",
+            "UPDATE subscriptions SET status = 'canceled', updated_at = NOW() WHERE id = %s",
             (sub_id,),
         )
 
