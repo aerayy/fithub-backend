@@ -15,56 +15,52 @@ def cancel_subscription(
     Cancel the client's active subscription.
     Sets status to 'cancelled', keeps access until ends_at.
     """
-    client_user_id = current_user["id"]
-    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        client_user_id = current_user["id"]
+        cur = db.cursor()
 
-    # Find active subscription
-    cur.execute(
-        """
-        SELECT id, status, ends_at
-        FROM subscriptions
-        WHERE client_user_id = %s
-          AND status IN ('active', 'pending')
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (client_user_id,),
-    )
-    sub = cur.fetchone()
+        # Find active subscription
+        cur.execute(
+            """
+            SELECT id, status, ends_at
+            FROM subscriptions
+            WHERE client_user_id = %s
+              AND status IN ('active', 'pending')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (client_user_id,),
+        )
+        sub = cur.fetchone()
 
-    if not sub:
-        raise HTTPException(status_code=404, detail="Aktif abonelik bulunamadi")
+        if not sub:
+            raise HTTPException(status_code=404, detail="Aktif abonelik bulunamadi")
 
-    # Cancel subscription
-    cur.execute(
-        """
-        UPDATE subscriptions
-        SET status = 'cancelled', updated_at = NOW()
-        WHERE id = %s
-        """,
-        (sub["id"],),
-    )
+        sub_id = sub["id"]
 
-    # Deactivate workout programs
-    cur.execute(
-        """
-        UPDATE workout_programs
-        SET is_active = FALSE, updated_at = NOW()
-        WHERE client_user_id = %s AND is_active = TRUE
-        """,
-        (client_user_id,),
-    )
+        # Cancel subscription
+        cur.execute(
+            "UPDATE subscriptions SET status = 'cancelled', updated_at = NOW() WHERE id = %s",
+            (sub_id,),
+        )
 
-    # Deactivate nutrition programs
-    cur.execute(
-        """
-        UPDATE nutrition_programs
-        SET is_active = FALSE, updated_at = NOW()
-        WHERE client_user_id = %s AND is_active = TRUE
-        """,
-        (client_user_id,),
-    )
+        # Deactivate workout programs
+        cur.execute(
+            "UPDATE workout_programs SET is_active = FALSE, updated_at = NOW() WHERE client_user_id = %s AND is_active = TRUE",
+            (client_user_id,),
+        )
 
-    db.commit()
+        # Deactivate nutrition programs
+        cur.execute(
+            "UPDATE nutrition_programs SET is_active = FALSE, updated_at = NOW() WHERE client_user_id = %s AND is_active = TRUE",
+            (client_user_id,),
+        )
 
-    return {"ok": True, "message": "Abonelik iptal edildi"}
+        db.commit()
+        return {"ok": True, "message": "Abonelik iptal edildi"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Cancel error: {str(e)}")
