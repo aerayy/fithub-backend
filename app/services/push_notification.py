@@ -7,16 +7,21 @@ Sends notifications to client devices when:
 """
 import os
 import json
-import firebase_admin
-from firebase_admin import credentials, messaging
 from app.core.database import get_db
+
+try:
+    import firebase_admin
+    from firebase_admin import credentials, messaging
+    _firebase_available = True
+except ImportError:
+    _firebase_available = False
 
 # Initialize Firebase Admin SDK
 _firebase_initialized = False
 
 def _init_firebase():
     global _firebase_initialized
-    if _firebase_initialized:
+    if _firebase_initialized or not _firebase_available:
         return
 
     # Try service account file first, then env var
