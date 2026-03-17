@@ -1,0 +1,70 @@
+"""Client subscription management - cancel endpoint."""
+from fastapi import Depends, HTTPException
+from psycopg2.extras import RealDictCursor
+from app.core.database import get_db
+from app.core.security import require_role
+from .routes import router
+
+
+@router.post("/subscriptions/cancel")
+def cancel_subscription(
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """
+    Cancel the client's active subscription.
+    Sets status to 'cancelled', keeps access until ends_at.
+    """
+    client_user_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # Find active subscription
+    cur.execute(
+        """
+        SELECT id, status, ends_at
+        FROM subscriptions
+        WHERE client_user_id = %s
+          AND status IN ('active', 'pending')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (client_user_id,),
+    )
+    sub = cur.fetchone()
+
+    if not sub:
+        raise HTTPException(status_code=404, detail="Aktif abonelik bulunamadi")
+
+    # Cancel subscription
+    cur.execute(
+        """
+        UPDATE subscriptions
+        SET status = 'cancelled', updated_at = NOW()
+        WHERE id = %s
+        """,
+        (sub["id"],),
+    )
+
+    # Deactivate workout programs
+    cur.execute(
+        """
+        UPDATE workout_programs
+        SET is_active = FALSE, updated_at = NOW()
+        WHERE client_user_id = %s AND is_active = TRUE
+        """,
+        (client_user_id,),
+    )
+
+    # Deactivate nutrition programs
+    cur.execute(
+        """
+        UPDATE nutrition_programs
+        SET is_active = FALSE, updated_at = NOW()
+        WHERE client_user_id = %s AND is_active = TRUE
+        """,
+        (client_user_id,),
+    )
+
+    db.commit()
+
+    return {"ok": True, "message": "Abonelik iptal edildi"}

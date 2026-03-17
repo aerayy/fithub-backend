@@ -69,3 +69,8 @@ try:
     from . import fcm  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import subscriptions  # noqa: F401
+except Exception:
+    pass
