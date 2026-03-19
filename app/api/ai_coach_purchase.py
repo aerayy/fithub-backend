@@ -73,22 +73,25 @@ def purchase_ai_coach(
         )
         sub_id = cur.fetchone()["id"]
 
-        # 3. Get client onboarding data
+        # 3. Get client onboarding data (both tables)
         cur.execute("SELECT * FROM clients WHERE user_id = %s", (client_user_id,))
         client = cur.fetchone() or {}
 
-        cur.execute("SELECT full_name, email FROM users WHERE id = %s", (client_user_id,))
-        user = cur.fetchone() or {}
+        cur.execute("SELECT * FROM client_onboarding WHERE user_id = %s", (client_user_id,))
+        onboarding = cur.fetchone() or {}
 
-        # Get onboarding details
-        gender = client.get("gender", "")
-        weight = client.get("weight_kg", 70)
-        height = client.get("height_cm", 175)
-        goal = client.get("goal_type", "")
-        experience = client.get("activity_level", "beginner")
+        # Merge: prefer onboarding data, fallback to clients
+        gender = onboarding.get("gender") or client.get("gender", "")
+        weight = onboarding.get("weight_kg") or client.get("weight_kg", 70)
+        height = onboarding.get("height_cm") or client.get("height_cm", 175)
+        goal = onboarding.get("your_goal") or client.get("goal_type", "")
+        experience = onboarding.get("experience") or client.get("activity_level", "beginner")
+        preferred_days = onboarding.get("preferred_workout_days") or []
+        body_focus = onboarding.get("body_part_focus") or []
+        commit = onboarding.get("commit", "")
 
         # 4. Generate workout program
-        _generate_workout(cur, client_user_id, gender, weight, goal, experience)
+        _generate_workout(cur, client_user_id, gender, weight, goal, experience, preferred_days, body_focus)
 
         # 5. Generate nutrition program
         _generate_nutrition(cur, client_user_id, weight, goal)
@@ -125,26 +128,20 @@ def purchase_ai_coach(
         raise HTTPException(status_code=500, detail=f"AI Coach purchase error: {str(e)}")
 
 
-def _generate_workout(cur, client_user_id, gender, weight, goal, experience):
-    """Generate and save workout program."""
-    # Deactivate old programs
+def _generate_workout(cur, client_user_id, gender, weight, goal, experience, preferred_days=None, body_focus=None):
+    """Generate and save workout program based on user preferences."""
     cur.execute(
         "UPDATE workout_programs SET is_active = FALSE WHERE client_user_id = %s AND is_active = TRUE",
         (client_user_id,),
     )
 
-    # Create program
     cur.execute(
-        """
-        INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active, created_at)
-        VALUES (%s, %s, 'AI Antrenman Programi', TRUE, NOW())
-        RETURNING id
-        """,
+        """INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active, created_at)
+           VALUES (%s, %s, 'AI Antrenman Programi', TRUE, NOW()) RETURNING id""",
         (client_user_id, AI_COACH_USER_ID),
     )
     program_id = cur.fetchone()["id"]
 
-    # Exercise library lookup
     def _match_exercise(name):
         cur.execute(
             """SELECT id FROM exercise_library WHERE canonical_name ILIKE %s
@@ -154,50 +151,30 @@ def _generate_workout(cur, client_user_id, gender, weight, goal, experience):
         row = cur.fetchone()
         return row["id"] if row else None
 
-    # Pre-built splits based on goal
-    goal_l = (goal or "").lower()
-    is_begin = "begin" in (experience or "").lower()
+    # Map preferred days to day keys
+    day_name_map = {
+        "monday": "mon", "tuesday": "tue", "wednesday": "wed", "thursday": "thu",
+        "friday": "fri", "saturday": "sat", "sunday": "sun",
+    }
 
-    if "lose" in goal_l or "weight" in goal_l:
-        week = {
-            "mon": {"title": "Tum Vucut A", "exercises": [
-                ("Barbell Squat", "3", "12"), ("Dumbbell Bench Press", "3", "10"),
-                ("Bent Over Barbell Row", "3", "10"), ("Mountain Climbers", "3", "30 sn"),
-                ("Plank", "3", "45 sn"),
-            ]},
-            "wed": {"title": "Tum Vucut B", "exercises": [
-                ("Leg Press", "3", "12"), ("Incline Dumbbell Press", "3", "10"),
-                ("Dumbbell Incline Row", "3", "10"), ("Crunches", "3", "20"),
-                ("Dead Bug", "3", "12"),
-            ]},
-            "fri": {"title": "Tum Vucut C", "exercises": [
-                ("Barbell Squat", "3", "10"), ("Dumbbell Shoulder Press", "3", "12"),
-                ("Dumbbell Bicep Curl", "3", "12"), ("Pushups", "3", "15"),
-                ("Cable Russian Twists", "3", "15"),
-            ]},
-        }
-    else:
-        week = {
-            "mon": {"title": "Push (Gogus/Omuz)", "exercises": [
-                ("Dumbbell Bench Press", "4", "10"), ("Incline Dumbbell Press", "3", "10"),
-                ("Dumbbell Shoulder Press", "3", "12"), ("Bench Dips", "3", "12"),
-                ("Pushups", "3", "15"),
-            ]},
-            "tue": {"title": "Pull (Sirt/Biceps)", "exercises": [
-                ("Bent Over Barbell Row", "4", "10"), ("Dumbbell Incline Row", "3", "10"),
-                ("Dumbbell Bicep Curl", "3", "12"), ("Incline Dumbbell Flyes", "3", "12"),
-            ]},
-            "thu": {"title": "Legs (Bacak)", "exercises": [
-                ("Barbell Squat", "4", "10"), ("Leg Press", "3", "12"),
-                ("Leg Extensions", "3", "12"), ("Assisted Bulgarian Split Squat", "3", "10"),
-                ("Standing Barbell Calf Raise", "4", "15"),
-            ]},
-            "fri": {"title": "Ust Vucut + Core", "exercises": [
-                ("Dumbbell Bench Press", "3", "12"), ("Dumbbell Shoulder Press", "3", "12"),
-                ("Dumbbell Bicep Curl", "3", "12"), ("Crunches", "3", "20"),
-                ("Plank", "3", "60 sn"),
-            ]},
-        }
+    active_days = []
+    if preferred_days and len(preferred_days) > 0:
+        for d in preferred_days:
+            key = day_name_map.get(d.lower(), "")
+            if key:
+                active_days.append(key)
+
+    if not active_days:
+        active_days = ["mon", "wed", "fri"]  # default 3 gun
+
+    # Build splits based on number of active days
+    splits = _build_splits(len(active_days), goal, experience, body_focus)
+
+    # Map splits to active days
+    week = {}
+    for i, day_key in enumerate(active_days):
+        if i < len(splits):
+            week[day_key] = splits[i]
 
     day_keys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     for idx, day_key in enumerate(day_keys):
@@ -324,3 +301,138 @@ def _generate_cardio(cur, client_user_id, goal, experience):
                VALUES (%s, %s, %s, %s, %s, 0)""",
             (prog_id, day, ctype, duration, notes),
         )
+
+
+def _build_splits(day_count, goal, experience, body_focus=None):
+    """Build workout splits based on day count and goal."""
+    goal_l = (goal or "").lower()
+    focus = [f.lower() for f in (body_focus or [])]
+
+    if day_count <= 2:
+        return [
+            {"title": "Tum Vucut A", "exercises": [
+                ("Barbell Squat", "3", "12"), ("Dumbbell Bench Press", "3", "10"),
+                ("Bent Over Barbell Row", "3", "10"), ("Dumbbell Shoulder Press", "3", "12"),
+                ("Plank", "3", "45 sn"),
+            ]},
+            {"title": "Tum Vucut B", "exercises": [
+                ("Leg Press", "3", "12"), ("Incline Dumbbell Press", "3", "10"),
+                ("Dumbbell Incline Row", "3", "10"), ("Dumbbell Bicep Curl", "3", "12"),
+                ("Crunches", "3", "20"),
+            ]},
+        ]
+
+    if day_count == 3:
+        if "lose" in goal_l:
+            return [
+                {"title": "Tum Vucut + Kardiyo", "exercises": [
+                    ("Barbell Squat", "3", "15"), ("Dumbbell Bench Press", "3", "12"),
+                    ("Bent Over Barbell Row", "3", "12"), ("Mountain Climbers", "3", "30 sn"),
+                    ("Plank", "3", "45 sn"),
+                ]},
+                {"title": "Ust Vucut + Core", "exercises": [
+                    ("Incline Dumbbell Press", "3", "12"), ("Dumbbell Shoulder Press", "3", "12"),
+                    ("Dumbbell Bicep Curl", "3", "12"), ("Bench Dips", "3", "12"),
+                    ("Cable Russian Twists", "3", "15"),
+                ]},
+                {"title": "Alt Vucut + HIIT", "exercises": [
+                    ("Barbell Squat", "3", "12"), ("Leg Press", "3", "15"),
+                    ("Leg Extensions", "3", "12"), ("Pushups", "3", "15"),
+                    ("Dead Bug", "3", "12"),
+                ]},
+            ]
+        return [
+            {"title": "Push (Gogus/Omuz/Triceps)", "exercises": [
+                ("Dumbbell Bench Press", "4", "10"), ("Incline Dumbbell Press", "3", "10"),
+                ("Dumbbell Shoulder Press", "3", "12"), ("Bench Dips", "3", "12"),
+            ]},
+            {"title": "Pull (Sirt/Biceps)", "exercises": [
+                ("Bent Over Barbell Row", "4", "10"), ("Dumbbell Incline Row", "3", "10"),
+                ("Dumbbell Bicep Curl", "3", "12"), ("Incline Dumbbell Flyes", "3", "12"),
+            ]},
+            {"title": "Legs (Bacak/Kalca)", "exercises": [
+                ("Barbell Squat", "4", "10"), ("Leg Press", "3", "12"),
+                ("Leg Extensions", "3", "12"), ("Standing Barbell Calf Raise", "4", "15"),
+            ]},
+        ]
+
+    if day_count == 4:
+        return [
+            {"title": "Gogus + Triceps", "exercises": [
+                ("Dumbbell Bench Press", "4", "10"), ("Incline Dumbbell Press", "3", "10"),
+                ("Incline Dumbbell Flyes", "3", "12"), ("Bench Dips", "3", "12"),
+                ("Pushups", "3", "15"),
+            ]},
+            {"title": "Sirt + Biceps", "exercises": [
+                ("Bent Over Barbell Row", "4", "10"), ("Dumbbell Incline Row", "3", "10"),
+                ("Dumbbell Bicep Curl", "4", "10"), ("Dead Bug", "3", "12"),
+            ]},
+            {"title": "Bacak + Kalca", "exercises": [
+                ("Barbell Squat", "4", "10"), ("Leg Press", "3", "12"),
+                ("Leg Extensions", "3", "12"), ("Assisted Bulgarian Split Squat", "3", "10"),
+                ("Standing Barbell Calf Raise", "4", "15"),
+            ]},
+            {"title": "Omuz + Core", "exercises": [
+                ("Dumbbell Shoulder Press", "4", "10"), ("Dumbbell Bicep Curl", "3", "12"),
+                ("Crunches", "3", "20"), ("Plank", "3", "60 sn"),
+                ("Cable Russian Twists", "3", "15"),
+            ]},
+        ]
+
+    if day_count == 5:
+        return [
+            {"title": "Gogus", "exercises": [
+                ("Dumbbell Bench Press", "4", "10"), ("Incline Dumbbell Press", "3", "10"),
+                ("Incline Dumbbell Flyes", "3", "12"), ("Pushups", "3", "15"),
+            ]},
+            {"title": "Sirt", "exercises": [
+                ("Bent Over Barbell Row", "4", "10"), ("Dumbbell Incline Row", "3", "10"),
+                ("Dead Bug", "3", "12"),
+            ]},
+            {"title": "Omuz + Kol", "exercises": [
+                ("Dumbbell Shoulder Press", "4", "10"), ("Dumbbell Bicep Curl", "3", "12"),
+                ("Bench Dips", "3", "12"), ("Cable Russian Twists", "3", "15"),
+            ]},
+            {"title": "Bacak", "exercises": [
+                ("Barbell Squat", "4", "10"), ("Leg Press", "3", "12"),
+                ("Leg Extensions", "3", "12"), ("Standing Barbell Calf Raise", "4", "15"),
+            ]},
+            {"title": "Tum Vucut + Core", "exercises": [
+                ("Barbell Squat", "3", "12"), ("Dumbbell Bench Press", "3", "12"),
+                ("Bent Over Barbell Row", "3", "12"), ("Plank", "3", "60 sn"),
+                ("Crunches", "3", "20"), ("Mountain Climbers", "3", "30 sn"),
+            ]},
+        ]
+
+    # 6-7 days: PPL x2 + optional rest
+    return [
+        {"title": "Push A", "exercises": [
+            ("Dumbbell Bench Press", "4", "10"), ("Incline Dumbbell Press", "3", "10"),
+            ("Dumbbell Shoulder Press", "3", "12"), ("Bench Dips", "3", "12"),
+        ]},
+        {"title": "Pull A", "exercises": [
+            ("Bent Over Barbell Row", "4", "10"), ("Dumbbell Incline Row", "3", "10"),
+            ("Dumbbell Bicep Curl", "3", "12"),
+        ]},
+        {"title": "Legs A", "exercises": [
+            ("Barbell Squat", "4", "10"), ("Leg Press", "3", "12"),
+            ("Leg Extensions", "3", "12"), ("Standing Barbell Calf Raise", "4", "15"),
+        ]},
+        {"title": "Push B", "exercises": [
+            ("Incline Dumbbell Press", "4", "10"), ("Pushups", "3", "15"),
+            ("Dumbbell Shoulder Press", "3", "12"), ("Incline Dumbbell Flyes", "3", "12"),
+        ]},
+        {"title": "Pull B", "exercises": [
+            ("Dumbbell Incline Row", "4", "10"), ("Bent Over Barbell Row", "3", "12"),
+            ("Dumbbell Bicep Curl", "3", "12"), ("Dead Bug", "3", "12"),
+        ]},
+        {"title": "Legs B + Core", "exercises": [
+            ("Barbell Squat", "3", "12"), ("Assisted Bulgarian Split Squat", "3", "10"),
+            ("Leg Extensions", "3", "15"), ("Plank", "3", "60 sn"),
+            ("Crunches", "3", "20"),
+        ]},
+        {"title": "Aktif Dinlenme + Core", "exercises": [
+            ("Plank", "3", "60 sn"), ("Dead Bug", "3", "12"),
+            ("Cable Russian Twists", "3", "15"), ("Mountain Climbers", "3", "30 sn"),
+        ]},
+    ][:day_count]
