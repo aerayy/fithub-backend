@@ -13,6 +13,50 @@ from app.core.security import require_role
 from app.core.config import OPENAI_API_KEY
 from app.api.coach.students import router as students_router
 from app.api.coach.conversations import router as conversations_router
+import re
+
+
+def _match_exercise_library(cur, exercise_name: str):
+    """Match exercise name to exercise_library, return id or None."""
+    if not exercise_name:
+        return None
+
+    # 1. Exact match (case-insensitive)
+    cur.execute(
+        "SELECT id FROM exercise_library WHERE canonical_name ILIKE %s LIMIT 1",
+        (exercise_name,)
+    )
+    row = cur.fetchone()
+    if row:
+        return row["id"] if isinstance(row, dict) else row[0]
+
+    # 2. Fuzzy match - starts with
+    cur.execute(
+        """SELECT id FROM exercise_library
+           WHERE canonical_name ILIKE %s
+           ORDER BY CASE WHEN canonical_name ILIKE %s THEN 0 ELSE 1 END,
+                    length(canonical_name) ASC
+           LIMIT 1""",
+        (f"%{exercise_name}%", f"{exercise_name}%")
+    )
+    row = cur.fetchone()
+    if row:
+        return row["id"] if isinstance(row, dict) else row[0]
+
+    # 3. Normalize: remove parenthetical, try again
+    normalized = re.sub(r'\s*\([^)]*\)', '', exercise_name).strip()
+    if normalized != exercise_name:
+        cur.execute(
+            """SELECT id FROM exercise_library
+               WHERE canonical_name ILIKE %s
+               ORDER BY length(canonical_name) ASC LIMIT 1""",
+            (f"%{normalized}%",)
+        )
+        row = cur.fetchone()
+        if row:
+            return row["id"] if isinstance(row, dict) else row[0]
+
+    return None
 
 
 router = APIRouter(prefix="/coach", tags=["coach"])
@@ -353,19 +397,22 @@ def save_workout_program(
             # Insert exercises (for both old and new format)
             for ex_order, ex in enumerate(exercises_to_insert, start=1):
                 if isinstance(ex, dict):
+                    ex_name = ex.get("name") or ""
+                    lib_id = _match_exercise_library(cur, ex_name)
                     cur.execute(
                         """
                         INSERT INTO workout_exercises
-                        (workout_day_id, exercise_name, sets, reps, notes, order_index)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        (workout_day_id, exercise_name, sets, reps, notes, order_index, exercise_library_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             workout_day_id,
-                            ex.get("name") or "",
+                            ex_name,
                             ex.get("sets"),
                             ex.get("reps") or "",
                             ex.get("notes") or "",
                             ex_order,
+                            lib_id,
                         ),
                     )
 
@@ -671,30 +718,34 @@ Return ONLY the JSON object, nothing else."""
             # Insert exercises (only if day has exercises)
             if exercises:
                 for ex_order, ex in enumerate(exercises, start=1):
-                    # Reps is TEXT column - keep as string, don't normalize to int
                     reps_raw = ex.get("reps", "")
                     reps_db = str(reps_raw) if reps_raw else ""
-                    
-                    # Sets is INT column - ensure it's an integer
+
                     sets_raw = ex.get("sets", 3)
                     try:
                         sets_db = int(sets_raw) if sets_raw else 3
                     except (ValueError, TypeError):
                         sets_db = 3
-                    
+
+                    ex_name = str(ex.get("name", ""))
+
+                    # Match to exercise_library for video + instructions
+                    lib_id = _match_exercise_library(cur, ex_name)
+
                     cur.execute(
                         """
                         INSERT INTO workout_exercises
-                        (workout_day_id, exercise_name, sets, reps, notes, order_index)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        (workout_day_id, exercise_name, sets, reps, notes, order_index, exercise_library_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             workout_day_id,
-                            str(ex.get("name", "")),
+                            ex_name,
                             sets_db,
                             reps_db,
                             str(ex.get("notes", "")),
                             ex_order,
+                            lib_id,
                         ),
                     )
 
