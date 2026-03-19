@@ -65,8 +65,8 @@ def purchase_ai_coach(
         # 2. Create subscription
         cur.execute(
             """
-            INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status, started_at, created_at, subscription_ref)
-            VALUES (%s, %s, %s, 'active', NOW(), NOW(), %s)
+            INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status, started_at, created_at, subscription_ref, program_assigned_at, program_state)
+            VALUES (%s, %s, %s, 'active', NOW(), NOW(), %s, NOW(), 'assigned')
             RETURNING id
             """,
             (client_user_id, AI_COACH_USER_ID, 'AI Koc', f'ai_coach_{client_user_id}_{int(datetime.utcnow().timestamp())}'),
