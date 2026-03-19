@@ -285,14 +285,16 @@ def confirm_subscription(
                 detail=f"Invalid coach_id: {coach_id}"
             )
 
-        # Check if there's already a subscription for this client+coach pair
+        # Check if there's already a subscription for this client+package pair (any status)
         cur.execute(
             """
             SELECT id, client_user_id, coach_user_id, plan_name, subscription_ref, status, started_at
             FROM subscriptions
-            WHERE client_user_id = %s AND coach_user_id = %s
+            WHERE client_user_id = %s AND (coach_user_id = %s OR package_id = %s)
+            ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, id DESC
+            LIMIT 1
             """,
-            (client_user_id, coach_user_id)
+            (client_user_id, coach_user_id, plan_id)
         )
         existing_coach_sub = cur.fetchone()
 
@@ -302,14 +304,15 @@ def confirm_subscription(
                 """
                 UPDATE subscriptions
                 SET plan_name = %s,
+                    package_id = %s,
                     subscription_ref = %s,
                     status = 'active',
                     started_at = %s,
-                    created_at = NOW()
+                    updated_at = NOW()
                 WHERE id = %s
                 RETURNING id, client_user_id, coach_user_id, plan_name, subscription_ref, status, started_at
                 """,
-                (plan_id, subscription_ref, datetime.utcnow(), existing_coach_sub["id"])
+                (plan_id, plan_id, subscription_ref, datetime.utcnow(), existing_coach_sub["id"])
             )
             updated_sub = cur.fetchone()
             db.commit()
