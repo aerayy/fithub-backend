@@ -296,9 +296,9 @@ def _generate_cardio(cur, client_user_id, goal, experience):
     )
 
     cur.execute(
-        """INSERT INTO cardio_programs (client_user_id, title, is_active, created_at)
-           VALUES (%s, 'AI Kardiyo Programi', TRUE, NOW()) RETURNING id""",
-        (client_user_id,),
+        """INSERT INTO cardio_programs (client_user_id, coach_user_id, title, is_active, created_at)
+           VALUES (%s, %s, 'AI Kardiyo Programi', TRUE, NOW()) RETURNING id""",
+        (client_user_id, AI_COACH_USER_ID),
     )
     prog_id = cur.fetchone()["id"]
 
