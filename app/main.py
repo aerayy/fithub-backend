@@ -16,6 +16,7 @@ from app.api.exercises import router as exercises_router
 from app.api.foods import router as foods_router
 from app.api.upload import router as upload_router
 from app.api.ws import router as ws_router
+from app.api.ai_coach import router as ai_coach_router
 
 
 app = FastAPI()
@@ -50,4 +51,5 @@ app.include_router(exercises_router)
 app.include_router(foods_router)
 app.include_router(upload_router)
 app.include_router(ws_router)
+app.include_router(ai_coach_router)
 
