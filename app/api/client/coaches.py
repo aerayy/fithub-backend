@@ -221,6 +221,21 @@ def get_coach_detail(
             "website": coach_row.get("website"),
         }
 
+        # Get transformations
+        cur.execute(
+            """SELECT id, before_image_url, after_image_url, student_name,
+                      weight_lost_kg, duration_weeks, description
+               FROM coach_transformations
+               WHERE coach_user_id = %s AND is_active = TRUE
+               ORDER BY created_at DESC LIMIT 10""",
+            (coach_user_id,),
+        )
+        trans_rows = cur.fetchall() or []
+        for tr in trans_rows:
+            if tr.get("weight_lost_kg") is not None:
+                tr["weight_lost_kg"] = float(tr["weight_lost_kg"])
+        coach["transformations"] = trans_rows
+
         return {
             "coach": coach,
             "packages": packages
