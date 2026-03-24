@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer()
 
-def create_token(user_id: int) -> str:
+def create_token(user_id: int, expiry_days: int = 7) -> str:
     payload = {
-        "sub": str(user_id),  # <- string yapıyoruz (standart)
-        "exp": datetime.utcnow() + timedelta(days=7),
+        "sub": str(user_id),
+        "exp": datetime.utcnow() + timedelta(days=expiry_days),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
