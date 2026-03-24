@@ -79,3 +79,8 @@ try:
     from . import measurements  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import badges  # noqa: F401
+except Exception:
+    pass
