@@ -84,3 +84,13 @@ try:
     from . import badges  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import meal_photos  # noqa: F401
+except Exception:
+    pass
+
+try:
+    from . import reviews  # noqa: F401
+except Exception:
+    pass
