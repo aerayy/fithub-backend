@@ -70,7 +70,9 @@ def client_me(
             c.gender,
             c.goal_type,
             c.activity_level,
-            c.assigned_coach_id
+            c.assigned_coach_id,
+            co.weight_kg AS onboarding_weight_kg,
+            co.target_weight_kg
         FROM users u
         LEFT JOIN clients c ON c.user_id = u.id
         LEFT JOIN client_onboarding co ON co.user_id = u.id
@@ -100,6 +102,8 @@ def client_me(
         "goal_type": row["goal_type"],
         "activity_level": row["activity_level"],
         "assigned_coach_id": row["assigned_coach_id"],
+        "onboarding_weight_kg": float(row["onboarding_weight_kg"]) if row.get("onboarding_weight_kg") else None,
+        "target_weight_kg": float(row["target_weight_kg"]) if row.get("target_weight_kg") else None,
     }
 
     return {
