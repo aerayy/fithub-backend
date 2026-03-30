@@ -75,12 +75,12 @@ def checkout(
         )
         existing_sub = cur.fetchone()
 
-        # Policy: If same coach, deactivate old subscription
-        if existing_sub and existing_sub["coach_user_id"] == coach_user_id:
+        # Policy: Cancel any existing active subscription (same or different coach)
+        if existing_sub:
             cur.execute(
                 """
                 UPDATE subscriptions
-                SET status = 'inactive'
+                SET status = 'canceled', updated_at = NOW()
                 WHERE id = %s
                 """,
                 (existing_sub["id"],)

@@ -56,6 +56,12 @@ def cancel_subscription(
             (client_user_id,),
         )
 
+        # Set assigned_coach_id to NULL so client becomes passive (NO_COACH)
+        cur.execute(
+            "UPDATE clients SET assigned_coach_id = NULL WHERE user_id = %s",
+            (client_user_id,),
+        )
+
         db.commit()
         return {"ok": True, "message": "Abonelik iptal edildi"}
 
