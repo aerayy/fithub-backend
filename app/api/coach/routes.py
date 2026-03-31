@@ -1283,9 +1283,15 @@ Sadece JSON döndür, başka bir şey yazma."""
     if not week_data:
         raise HTTPException(status_code=500, detail="AI boş bir program döndürdü")
 
-    # 6. Save as draft (is_active=FALSE)
+    # 6. Save and activate (deactivate old, activate new)
     try:
-        # Check for existing draft
+        # Deactivate all active nutrition programs for this student
+        cur.execute(
+            "UPDATE nutrition_programs SET is_active = FALSE, updated_at = NOW() WHERE client_user_id = %s AND is_active = TRUE",
+            (student_user_id,),
+        )
+
+        # Check for existing draft to reuse
         cur.execute("""
             SELECT id FROM nutrition_programs
             WHERE client_user_id = %s AND coach_user_id = %s AND is_active = FALSE
@@ -1296,11 +1302,11 @@ Sadece JSON döndür, başka bir şey yazma."""
         if existing:
             program_id = existing["id"]
             cur.execute("DELETE FROM nutrition_meals WHERE nutrition_program_id = %s", (program_id,))
-            cur.execute("UPDATE nutrition_programs SET updated_at = NOW(), title = 'AI Beslenme Programı' WHERE id = %s", (program_id,))
+            cur.execute("UPDATE nutrition_programs SET is_active = TRUE, updated_at = NOW(), title = 'AI Beslenme Programı' WHERE id = %s", (program_id,))
         else:
             cur.execute("""
                 INSERT INTO nutrition_programs (client_user_id, coach_user_id, title, is_active, created_at, updated_at)
-                VALUES (%s, %s, 'AI Beslenme Programı', FALSE, NOW(), NOW())
+                VALUES (%s, %s, 'AI Beslenme Programı', TRUE, NOW(), NOW())
                 RETURNING id
             """, (student_user_id, coach_id))
             row = cur.fetchone()
