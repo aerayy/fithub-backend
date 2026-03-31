@@ -1131,13 +1131,14 @@ def save_nutrition_program(
             meal_type = f"{day_key}:{idx}. Öğün"
             items = m.get("items") or []
             content = json.dumps(items)
+            planned_time = m.get("time") or None
 
             cur.execute(
                 """
-                INSERT INTO nutrition_meals (nutrition_program_id, meal_type, content, order_index)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO nutrition_meals (nutrition_program_id, meal_type, content, order_index, planned_time)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
-                (nutrition_program_id, meal_type, content, order_counter),
+                (nutrition_program_id, meal_type, content, order_counter, planned_time),
             )
 
     supplements = payload.get("supplements", [])
