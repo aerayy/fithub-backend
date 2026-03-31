@@ -86,12 +86,13 @@ def list_client_conversations(
             c.id,
             c.coach_user_id,
             COALESCE(u.full_name, u.email) AS coach_name,
-            u.profile_photo_url AS coach_photo_url,
+            COALESCE(co.photo_url, u.profile_photo_url) AS coach_photo_url,
             (SELECT CASE WHEN message_type = 'image' THEN '[Foto]' ELSE body END FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_preview,
             (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_at,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'coach' AND m.read_at IS NULL) AS unread_count
         FROM conversations c
         JOIN users u ON u.id = c.coach_user_id
+        LEFT JOIN coaches co ON co.user_id = c.coach_user_id
         WHERE c.client_user_id = %s
         ORDER BY last_message_at DESC NULLS LAST
         """,
@@ -122,12 +123,13 @@ def list_client_conversations(
                         c.id,
                         c.coach_user_id,
                         COALESCE(u.full_name, u.email) AS coach_name,
-                        u.profile_photo_url AS coach_photo_url,
+                        COALESCE(co.photo_url, u.profile_photo_url) AS coach_photo_url,
                         NULL AS last_message_preview,
                         NULL AS last_message_at,
                         0 AS unread_count
                     FROM conversations c
                     JOIN users u ON u.id = c.coach_user_id
+                    LEFT JOIN coaches co ON co.user_id = c.coach_user_id
                     WHERE c.id = %s
                     """,
                     (new_row["id"],),
