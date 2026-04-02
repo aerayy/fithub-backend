@@ -80,6 +80,7 @@ def list_client_conversations(
     client_user_id = current_user["id"]
     cur = db.cursor()
 
+    # Only show conversations with coaches who have active subscriptions
     cur.execute(
         """
         SELECT
@@ -94,6 +95,13 @@ def list_client_conversations(
         JOIN users u ON u.id = c.coach_user_id
         LEFT JOIN coaches co ON co.user_id = c.coach_user_id
         WHERE c.client_user_id = %s
+          AND EXISTS (
+            SELECT 1 FROM subscriptions s
+            WHERE s.client_user_id = c.client_user_id
+              AND s.coach_user_id = c.coach_user_id
+              AND s.status = 'active'
+              AND (s.ends_at IS NULL OR s.ends_at > NOW())
+          )
         ORDER BY last_message_at DESC NULLS LAST
         """,
         (client_user_id,),
