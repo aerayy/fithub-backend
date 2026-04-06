@@ -207,7 +207,7 @@ def save_onboarding(
 
 
 @router.get("/onboarding/{user_id}")
-def get_onboarding(user_id: int, db=Depends(get_db)):
+def get_onboarding(user_id: int, db=Depends(get_db), current_user=Depends(require_role("coach", "superadmin"))):
     cur = db.cursor()
     cur.execute(
         """

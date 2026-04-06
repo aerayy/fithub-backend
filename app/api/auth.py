@@ -1,5 +1,6 @@
 # app/api/auth.py
 import logging
+import os
 from fastapi import APIRouter, HTTPException, Depends
 import bcrypt
 from fastapi.security import OAuth2PasswordRequestForm
@@ -11,7 +12,7 @@ from app.core.database import get_db
 from app.core.security import create_token
 from app.schemas.auth import SignUpRequest, LoginRequest, GoogleAuthRequest
 
-GOOGLE_CLIENT_ID = "959258167670-qk58os7f1gi979njgafj7b942t6qahv7.apps.googleusercontent.com"
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 logger = logging.getLogger(__name__)
 

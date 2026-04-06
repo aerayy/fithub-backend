@@ -19,7 +19,7 @@ def subscriptions_ping():
 
 
 @router.get("/debug/db-info")
-def debug_db_info():
+def debug_db_info(current_user=Depends(require_role("superadmin"))):
     """
     Debug endpoint to show database connection info (dev only).
     Returns DB host, dbname, and user (no password).
