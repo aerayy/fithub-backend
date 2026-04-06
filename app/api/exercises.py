@@ -17,7 +17,7 @@ def search_exercises(
     Admin panel / AI / koç için:
     /exercises/search?q=push&limit=20
     """
-    cur = db.cursor()
+    cur = db.cursor(cursor_factory=RealDictCursor)
     like = f"%{q}%"
 
     cur.execute(
@@ -25,7 +25,7 @@ def search_exercises(
         SELECT
             id,
             external_id,
-            canonical_name,
+            canonical_name AS name,
             level,
             equipment,
             category,
@@ -41,14 +41,18 @@ def search_exercises(
                 FROM unnest(aliases) a
                 WHERE a ILIKE %s
             ))
-        ORDER BY canonical_name ASC
+        ORDER BY
+            CASE WHEN canonical_name ILIKE %s THEN 0
+                 WHEN canonical_name ILIKE %s THEN 1
+                 ELSE 2 END,
+            canonical_name ASC
         LIMIT %s
         """,
-        (like, like, like, limit),
+        (like, like, like, q, f"{q}%", limit),
     )
 
     rows = cur.fetchall() or []
-    return {"items": rows, "count": len(rows)}
+    return {"exercises": rows, "count": len(rows)}
 
 
 @router.get("/detail")
