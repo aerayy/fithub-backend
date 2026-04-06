@@ -1167,15 +1167,7 @@ def generate_nutrition_program(
     if not cur.fetchone():
         raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış")
 
-    # 2. Get target macros from payload
-    target_calories = payload.get("target_calories")
-    target_protein = payload.get("target_protein")
-    target_carbs = payload.get("target_carbs")
-    target_fat = payload.get("target_fat")
-    if not all([target_calories, target_protein, target_carbs, target_fat]):
-        raise HTTPException(status_code=400, detail="Hedef makrolar gerekli (target_calories, target_protein, target_carbs, target_fat)")
-
-    # 3. Fetch onboarding data
+    # 2. Fetch onboarding data first (needed for auto-macro calculation)
     cur.execute("""
         SELECT co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
                COALESCE(co.full_name, u.full_name, u.email) AS client_name
@@ -1187,10 +1179,43 @@ def generate_nutrition_program(
     onb = cur.fetchone()
 
     age = onb.get("age", "bilinmiyor") if onb else "bilinmiyor"
-    weight = onb.get("weight_kg", "bilinmiyor") if onb else "bilinmiyor"
-    height = onb.get("height_cm", "bilinmiyor") if onb else "bilinmiyor"
+    weight = onb.get("weight_kg", 70) if onb else 70
+    height = onb.get("height_cm", 170) if onb else 170
     gender = onb.get("gender", "bilinmiyor") if onb else "bilinmiyor"
     goal = onb.get("your_goal", "genel sağlık") if onb else "genel sağlık"
+
+    # 3. Get target macros from payload OR auto-calculate from onboarding
+    target_calories = payload.get("target_calories")
+    target_protein = payload.get("target_protein")
+    target_carbs = payload.get("target_carbs")
+    target_fat = payload.get("target_fat")
+
+    if not all([target_calories, target_protein, target_carbs, target_fat]):
+        # Auto-calculate from onboarding data
+        w = float(weight) if weight != "bilinmiyor" else 70
+        h = float(height) if height != "bilinmiyor" else 170
+        a = int(age) if age != "bilinmiyor" else 25
+        g = str(gender).lower()
+        gl = str(goal).lower()
+
+        # Mifflin-St Jeor BMR
+        if g in ("female", "kadın"):
+            bmr = 10 * w + 6.25 * h - 5 * a - 161
+        else:
+            bmr = 10 * w + 6.25 * h - 5 * a + 5
+
+        # Activity multiplier + goal adjustment
+        tdee = bmr * 1.55  # moderate activity
+        if "lose" in gl or "weight" in gl:
+            target_calories = int(tdee * 0.8)
+        elif "gain" in gl or "muscle" in gl:
+            target_calories = int(tdee * 1.15)
+        else:
+            target_calories = int(tdee)
+
+        target_protein = int(w * 2)
+        target_fat = int(target_calories * 0.25 / 9)
+        target_carbs = int((target_calories - target_protein * 4 - target_fat * 9) / 4)
     client_name = onb.get("client_name", "Danışan") if onb else "Danışan"
 
     # 4. Build prompt — Türk fitness koçu tarzında, haftalık plan, her gün farklı
