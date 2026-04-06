@@ -1218,12 +1218,40 @@ def generate_nutrition_program(
         target_carbs = int((target_calories - target_protein * 4 - target_fat * 9) / 4)
     client_name = onb.get("client_name", "Danışan") if onb else "Danışan"
 
-    # 4. Build prompt — Türk fitness koçu tarzında, haftalık plan, her gün farklı
-    day_labels_tr = {
-        "mon": "Pazartesi", "tue": "Salı", "wed": "Çarşamba",
-        "thu": "Perşembe", "fri": "Cuma", "sat": "Cumartesi", "sun": "Pazar"
-    }
+    # 4. Fetch food database for AI prompt
+    cur.execute("""
+        SELECT
+            COALESCE(fl.name_tr, fi.name_en) AS name,
+            fi.serving_unit,
+            fn.calories_kcal AS cal,
+            fn.protein_g AS prot,
+            fn.fat_g AS fat,
+            fn.carbs_g AS carb
+        FROM food_items fi
+        JOIN food_nutrients_100g fn ON fn.food_id = fi.id
+        LEFT JOIN food_localization_tr fl ON fl.food_id = fi.id
+        WHERE fi.source = 'begreens'
+        ORDER BY fi.id
+    """)
+    db_foods = cur.fetchall() or []
 
+    # Build compact food list for prompt
+    food_lines = []
+    for f in db_foods:
+        name = f["name"] or ""
+        unit = f.get("serving_unit") or "g"
+        cal = f.get("cal") or 0
+        prot = f.get("prot") or 0
+        fat = f.get("fat") or 0
+        carb = f.get("carb") or 0
+        if unit == "g":
+            food_lines.append(f"{name} | 100g: {cal}kcal P:{prot} C:{carb} F:{fat}")
+        else:
+            food_lines.append(f"{name} | 1 {unit}: {cal}kcal P:{prot} C:{carb} F:{fat}")
+
+    food_catalog = "\n".join(food_lines)
+
+    # Build prompt
     prompt = f"""Sen Türkiye'de çalışan profesyonel bir fitness koçusun. Danışanın için haftalık beslenme programı hazırlaman gerekiyor.
 
 Danışan Bilgileri:
@@ -1234,15 +1262,20 @@ Danışan Bilgileri:
 - Boy: {height} cm
 - Hedef: {goal}
 
-Günlük Hedef Makrolar (her gün bu değerlere yakın olmalı):
+Günlük Hedef Makrolar:
 - Kalori: {target_calories} kcal
 - Protein: {target_protein}g
 - Karbonhidrat: {target_carbs}g
 - Yağ: {target_fat}g
 
-7 günlük (Pazartesi-Pazar) beslenme programı oluştur. Her gün farklı yemekler olsun, tekrar eden monoton bir liste olmasın. Türk mutfağına uygun, gerçekçi ve uygulanabilir yemekler seç.
+SADECE aşağıdaki besin veritabanından seç. Listede olmayan besini KULLANMA.
+Her besinin makro değerleri verilmiş — bunları kullanarak miktarı (gram veya adet) ayarla ve toplam makroyu hesapla.
 
-JSON formatında döndür. Yapı şu şekilde olmalı:
+=== BESİN VERİTABANI ===
+{food_catalog}
+=== VERİTABANI SONU ===
+
+JSON formatında 7 günlük program döndür:
 {{
   "week": {{
     "mon": {{
@@ -1253,36 +1286,30 @@ JSON formatında döndür. Yapı şu şekilde olmalı:
           "items": [
             {{
               "name_tr": "Yulaf Ezmesi",
-              "name_en": "Oatmeal",
               "grams": 80,
-              "calories": 311,
-              "protein": 14,
-              "carbs": 53,
-              "fat": 6
+              "calories": 294,
+              "protein": 8.8,
+              "carbs": 45.6,
+              "fat": 7.2
             }}
           ]
         }}
       ]
     }},
-    "tue": {{ ... }},
-    "wed": {{ ... }},
-    "thu": {{ ... }},
-    "fri": {{ ... }},
-    "sat": {{ ... }},
-    "sun": {{ ... }}
+    "tue": {{ ... }}, "wed": {{ ... }}, "thu": {{ ... }}, "fri": {{ ... }}, "sat": {{ ... }}, "sun": {{ ... }}
   }}
 }}
 
 Kurallar:
-- Her gün 4-6 öğün olsun, öğünler "1. Öğün", "2. Öğün", "3. Öğün" şeklinde numaralandırılsın
-- Her günün toplam makroları hedef değerlere %5 sapma ile uymalı
-- Türk mutfağı ağırlıklı ol: yumurta, peynir, zeytin, domates, salatalık, tam buğday ekmek, yulaf, tavuk göğsü, kıyma, köfte, mercimek çorbası, bulgur pilavı, makarna, pirinç pilavı, kuru fasulye, nohut, ton balığı, somon, yoğurt, ayran, süt, muz, elma, ceviz, badem, fıstık ezmesi, zeytinyağı, avokado, brokoli, ıspanak, havuç, patates, tatlı patates vs.
-- Günler arası çeşitlilik sağla, aynı ana yemeği üst üste koyma
-- Her item'da grams, calories, protein, carbs, fat değerleri olsun (hesaplanmış, gram bazında)
-- time alanı gerçekçi saatler olsun: "07:30", "10:00", "12:30", "15:30", "19:00", "21:00" gibi
+- Her gün 4-6 öğün, "1. Öğün", "2. Öğün" şeklinde numaralandır
+- Her günün toplam makroları hedefe %5 sapma ile uysun
+- Birim "g" olan besinlerde: istediğin gramı yaz, makroyu orantıla (ör: 100g'da 116kcal ise 200g = 232kcal)
+- Birim "adet/porsiyon/dilim" olanlarda: adet sayısını grams alanına yaz, makroyu çarp
+- Günler arası çeşitlilik sağla
+- time: gerçekçi saatler ("07:30", "10:00", "12:30", "15:30", "19:00")
 - Pratik ve hazırlanması kolay yemekler tercih et
 
-Sadece JSON döndür, başka bir şey yazma."""
+Sadece JSON döndür."""
 
     # 5. Call OpenAI
     from openai import OpenAI as _OpenAI
