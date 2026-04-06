@@ -5,9 +5,11 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-JWT_SECRET = os.getenv("JWT_SECRET", "")
+JWT_SECRET = os.getenv("JWT_SECRET") or os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET_KEY") or ""
 if not JWT_SECRET:
-    raise RuntimeError("JWT_SECRET environment variable is not set")
+    import warnings
+    warnings.warn("JWT_SECRET is not set — using insecure fallback. Set JWT_SECRET env var in production!", stacklevel=2)
+    JWT_SECRET = "dev-only-insecure-fallback-change-me"
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 DB_NAME = os.getenv("DB_NAME", "fithub")
