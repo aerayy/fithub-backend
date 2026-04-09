@@ -22,7 +22,7 @@ def submit_review(
 ):
     """Submit or update a coach review."""
     if body.rating < 1 or body.rating > 5:
-        raise HTTPException(400, "Rating 1-5 arasi olmali")
+        raise HTTPException(400, "Rating 1-5 arası olmalı")
 
     cur = db.cursor(cursor_factory=RealDictCursor)
 

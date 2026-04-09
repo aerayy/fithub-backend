@@ -34,7 +34,7 @@ def cancel_subscription(
         sub = cur.fetchone()
 
         if not sub:
-            raise HTTPException(status_code=404, detail="Aktif abonelik bulunamadi")
+            raise HTTPException(status_code=404, detail="Aktif abonelik bulunamadı")
 
         sub_id = sub["id"]
 

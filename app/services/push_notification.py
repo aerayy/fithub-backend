@@ -47,7 +47,9 @@ def _init_firebase():
 
 def _get_user_tokens(user_id: int) -> list[str]:
     """Get all FCM tokens for a user."""
-    conn = get_db()
+    import psycopg2
+    from app.core.config import DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
+    conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
     try:
         cur = conn.cursor()
         cur.execute("SELECT fcm_token FROM fcm_tokens WHERE user_id = %s", (user_id,))

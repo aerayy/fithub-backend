@@ -30,7 +30,7 @@ class RegisterRequest(BaseModel):
     @classmethod
     def validate_email(cls, v):
         if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
-            raise ValueError('Gecersiz e-posta formati')
+            raise ValueError('Geçersiz e-posta formatı')
         return v.lower().strip()
 
     @field_validator('phone')
@@ -40,18 +40,18 @@ class RegisterRequest(BaseModel):
         if cleaned.startswith('90'):
             cleaned = cleaned[2:]
         if not cleaned.startswith('5') or len(cleaned) != 10:
-            raise ValueError('Gecersiz telefon numarasi. Ornek: 05xx xxx xx xx')
+            raise ValueError('Geçersiz telefon numarası. Örnek: 05xx xxx xx xx')
         return f'+90{cleaned}'
 
     @field_validator('password')
     @classmethod
     def validate_password(cls, v):
         if len(v) < 8:
-            raise ValueError('Sifre en az 8 karakter olmali')
+            raise ValueError('Şifre en az 8 karakter olmalı')
         if not re.search(r'[0-9]', v):
-            raise ValueError('Sifre en az 1 rakam icermeli')
+            raise ValueError('Şifre en az 1 rakam içermeli')
         if not re.search(r'[a-zA-Z]', v):
-            raise ValueError('Sifre en az 1 harf icermeli')
+            raise ValueError('Şifre en az 1 harf içermeli')
         return v
 
 
@@ -136,27 +136,27 @@ def register(body: RegisterRequest, db=Depends(get_db)):
 
     # Password match
     if body.password != body.password_confirm:
-        raise HTTPException(400, "Sifreler eslesmiyor")
+        raise HTTPException(400, "Şifreler eşleşmiyor")
 
     # Age check
     try:
         birthdate = datetime.strptime(body.birthdate, '%Y-%m-%d').date()
         if birthdate > datetime.now().date():
-            raise HTTPException(400, "Gecersiz dogum tarihi")
+            raise HTTPException(400, "Geçersiz doğum tarihi")
         age = (datetime.now().date() - birthdate).days // 365
         if age < 18:
             raise HTTPException(400, detail="AGE_RESTRICTION")
     except ValueError:
-        raise HTTPException(400, "Dogum tarihi formati: YYYY-MM-DD")
+        raise HTTPException(400, "Doğum tarihi formatı: YYYY-MM-DD")
 
     # Check existing
     cur.execute("SELECT id FROM users WHERE email = %s", (body.email,))
     if cur.fetchone():
-        raise HTTPException(400, "Bu e-posta zaten kayitli")
+        raise HTTPException(400, "Bu e-posta zaten kayıtlı")
 
     cur.execute("SELECT id FROM users WHERE phone = %s", (body.phone,))
     if cur.fetchone():
-        raise HTTPException(400, "Bu telefon numarasi zaten kayitli")
+        raise HTTPException(400, "Bu telefon numarası zaten kayıtlı")
 
     # Create user
     password_hash = _hash_password(body.password)
@@ -218,16 +218,16 @@ def verify_otp(body: VerifyOTPRequest, db=Depends(get_db)):
     )
     user = cur.fetchone()
     if not user:
-        raise HTTPException(400, "Kullanici bulunamadi")
+        raise HTTPException(400, "Kullanıcı bulunamadı")
 
     # Check lock
     if user["otp_locked_until"] and user["otp_locked_until"] > datetime.utcnow():
         remaining = (user["otp_locked_until"] - datetime.utcnow()).seconds // 60
-        raise HTTPException(429, f"Cok fazla deneme. {remaining + 1} dakika sonra tekrar deneyin.")
+        raise HTTPException(429, f"Çok fazla deneme. {remaining + 1} dakika sonra tekrar deneyin.")
 
     # Check expiry
     if not user["otp_expires_at"] or user["otp_expires_at"] < datetime.utcnow():
-        raise HTTPException(400, "OTP suresi dolmus. Tekrar gonder butonunu kullanin.")
+        raise HTTPException(400, "OTP süresi dolmuş. Tekrar gönder butonunu kullanın.")
 
     # Check code
     if _hash_otp(body.otp) != user["otp_code"]:
@@ -241,7 +241,7 @@ def verify_otp(body: VerifyOTPRequest, db=Depends(get_db)):
             cur.execute("UPDATE users SET otp_attempts = %s WHERE id = %s", (attempts, user["id"]))
         db.commit()
         remaining = 3 - attempts
-        raise HTTPException(400, f"Yanlis kod. {remaining} hak kaldi." if remaining > 0 else "Cok fazla yanlis deneme. 10 dakika bekleyin.")
+        raise HTTPException(400, f"Yanlış kod. {remaining} hak kaldı." if remaining > 0 else "Çok fazla yanlış deneme. 10 dakika bekleyin.")
 
     # Success
     cur.execute(
@@ -263,10 +263,10 @@ def resend_otp(body: VerifyOTPRequest, db=Depends(get_db)):
     cur.execute("SELECT id, otp_locked_until FROM users WHERE phone = %s", (phone,))
     user = cur.fetchone()
     if not user:
-        raise HTTPException(400, "Kullanici bulunamadi")
+        raise HTTPException(400, "Kullanıcı bulunamadı")
 
     if user["otp_locked_until"] and user["otp_locked_until"] > datetime.utcnow():
-        raise HTTPException(429, "Cok fazla deneme. Lutfen bekleyin.")
+        raise HTTPException(429, "Çok fazla deneme. Lütfen bekleyin.")
 
     otp = _generate_otp()
     cur.execute(
@@ -294,10 +294,10 @@ def login(body: LoginRequest, db=Depends(get_db)):
 
     user = cur.fetchone()
     if not user:
-        raise HTTPException(401, "E-posta veya sifre hatali")
+        raise HTTPException(401, "E-posta veya şifre hatalı")
 
     if not _check_password(body.password, user["password_hash"]):
-        raise HTTPException(401, "E-posta veya sifre hatali")
+        raise HTTPException(401, "E-posta veya şifre hatalı")
 
     # Generate token
     expiry_days = 7 if body.remember_me else 1
@@ -348,7 +348,7 @@ def forgot_password(body: ForgotPasswordRequest, db=Depends(get_db)):
         cur.execute("SELECT id FROM users WHERE phone = %s", (phone,))
         user = cur.fetchone()
         if not user:
-            raise HTTPException(400, "Kullanici bulunamadi")
+            raise HTTPException(400, "Kullanıcı bulunamadı")
         otp = _generate_otp()
         cur.execute(
             "UPDATE users SET otp_code = %s, otp_expires_at = %s, otp_attempts = 0 WHERE id = %s",
@@ -358,7 +358,7 @@ def forgot_password(body: ForgotPasswordRequest, db=Depends(get_db)):
         _send_otp_sms(phone, otp)
         return {"ok": True, "masked_phone": _mask_phone(phone), "message": "Telefonunuza kod gonderildi"}
 
-    raise HTTPException(400, "Gecersiz method")
+    raise HTTPException(400, "Geçersiz method")
 
 
 @router.post("/reset-password")
@@ -367,7 +367,7 @@ def reset_password(body: ResetPasswordRequest, db=Depends(get_db)):
     cur = db.cursor(cursor_factory=RealDictCursor)
 
     if len(body.new_password) < 8:
-        raise HTTPException(400, "Sifre en az 8 karakter olmali")
+        raise HTTPException(400, "Şifre en az 8 karakter olmalı")
 
     user = None
 
@@ -377,16 +377,16 @@ def reset_password(body: ResetPasswordRequest, db=Depends(get_db)):
         cur.execute("SELECT id, otp_code, otp_expires_at FROM users WHERE phone = %s", (phone,))
         user = cur.fetchone()
         if not user or not user["otp_code"] or _hash_otp(body.otp) != user["otp_code"]:
-            raise HTTPException(400, "Gecersiz kod")
+            raise HTTPException(400, "Geçersiz kod")
         if user["otp_expires_at"] and user["otp_expires_at"] < datetime.utcnow():
-            raise HTTPException(400, "Kod suresi dolmus")
+            raise HTTPException(400, "Kod süresi dolmuş")
 
     # Via email token
     elif body.token:
         cur.execute("SELECT id FROM users WHERE email_verification_token = %s AND email_verification_expires_at > NOW()", (body.token,))
         user = cur.fetchone()
         if not user:
-            raise HTTPException(400, "Gecersiz veya suresi dolmus link")
+            raise HTTPException(400, "Geçersiz veya süresi dolmuş link")
 
     if not user:
         raise HTTPException(400, "Dogrulama bilgisi gerekli")
@@ -411,7 +411,7 @@ def verify_email(token: str, db=Depends(get_db)):
     )
     user = cur.fetchone()
     if not user:
-        return {"ok": False, "message": "Gecersiz veya suresi dolmus link"}
+        return {"ok": False, "message": "Geçersiz veya süresi dolmuş link"}
 
     cur.execute(
         "UPDATE users SET email_verified = TRUE, email_verification_token = NULL WHERE id = %s",
