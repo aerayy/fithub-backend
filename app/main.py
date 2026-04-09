@@ -21,7 +21,14 @@ from app.api.auth_v2 import router as auth_v2_router
 from app.api.ai_coach_purchase import router as ai_coach_purchase_router
 
 
+from app.core.database import close_pool
+
 app = FastAPI()
+
+
+@app.on_event("shutdown")
+def shutdown_db_pool():
+    close_pool()
 
 # ✅ DEV MODE: Her origin'e izin ver (cookie yok -> allow_credentials=False şart)
 import os

@@ -46,16 +46,16 @@ def _init_firebase():
 
 
 def _get_user_tokens(user_id: int) -> list[str]:
-    """Get all FCM tokens for a user."""
-    import psycopg2
-    from app.core.config import DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
-    conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+    """Get all FCM tokens for a user (uses connection pool)."""
+    from app.core.database import _get_pool
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         cur = conn.cursor()
         cur.execute("SELECT fcm_token FROM fcm_tokens WHERE user_id = %s", (user_id,))
         return [row[0] for row in cur.fetchall()]
     finally:
-        conn.close()
+        pool.putconn(conn)
 
 
 def send_notification(user_id: int, title: str, body: str, data: dict = None):

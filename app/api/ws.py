@@ -30,12 +30,18 @@ router = APIRouter()
 
 
 def _get_db():
-    """Direct DB connection for WebSocket context (no FastAPI Depends)."""
-    return psycopg2.connect(
-        dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
-        host=DB_HOST, port=int(DB_PORT),
-        cursor_factory=RealDictCursor,
-    )
+    """Get pooled DB connection for WebSocket context (no FastAPI Depends)."""
+    from app.core.database import _get_pool
+    return _get_pool().getconn()
+
+
+def _return_db(conn):
+    """Return connection to pool."""
+    from app.core.database import _get_pool
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        pass
 
 
 def _authenticate_token(token: str):
@@ -47,7 +53,7 @@ def _authenticate_token(token: str):
         cur = conn.cursor()
         cur.execute("SELECT id, email, role FROM users WHERE id = %s", (user_id,))
         user = cur.fetchone()
-        conn.close()
+        _return_db(conn)
         return dict(user) if user else None
     except Exception as e:
         logger.warning(f"WS auth failed: {e}")
@@ -82,7 +88,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             (user_id, user_id),
         )
         conv_ids = [r["id"] for r in (cur.fetchall() or [])]
-        conn.close()
+        _return_db(conn)
 
         await websocket.send_json({
             "type": "connected",
@@ -185,7 +191,7 @@ async def _handle_send_message(sender_id: int, sender_role: str, data: dict):
         logger.error(f"WS _handle_send_message error: {e}")
         conn.rollback()
     finally:
-        conn.close()
+        _return_db(conn)
 
 
 async def _handle_typing(sender_id: int, data: dict):
@@ -217,7 +223,7 @@ async def _handle_typing(sender_id: int, data: dict):
             "user_id": sender_id,
         })
     finally:
-        conn.close()
+        _return_db(conn)
 
 
 async def _handle_read(user_id: int, user_role: str, data: dict):
@@ -253,4 +259,4 @@ async def _handle_read(user_id: int, user_role: str, data: dict):
         logger.error(f"WS _handle_read error: {e}")
         conn.rollback()
     finally:
-        conn.close()
+        _return_db(conn)
