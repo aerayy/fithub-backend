@@ -14,6 +14,7 @@ class CreateCoachRequest(BaseModel):
     specialties: Optional[List[str]] = None
     instagram: Optional[str] = None
     is_active: Optional[bool] = True
+    referral_code: Optional[str] = Field(None, min_length=3, max_length=20, pattern="^[A-Za-z0-9]+$")
 
     class Config:
         json_schema_extra = {
@@ -28,6 +29,11 @@ class CreateCoachRequest(BaseModel):
                 "rating_count": 10,
                 "specialties": ["Weight Loss", "Strength Training", "Nutrition"],
                 "instagram": "@johndoe",
-                "is_active": True
+                "is_active": True,
+                "referral_code": "JOHN10"
             }
         }
+
+
+class SetReferralCodeRequest(BaseModel):
+    referral_code: Optional[str] = Field(None, min_length=3, max_length=20, pattern="^[A-Za-z0-9]+$")

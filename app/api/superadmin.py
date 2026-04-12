@@ -106,6 +106,7 @@ def list_all_coaches(
             u.created_at,
             (SELECT COUNT(*) FROM clients cl WHERE cl.assigned_coach_id = c.user_id) AS student_count,
             (SELECT COUNT(*) FROM subscriptions s WHERE s.coach_user_id = c.user_id AND s.status = 'active') AS active_sub_count,
+            c.referral_code,
             (SELECT COALESCE(SUM(cp.price), 0) FROM subscriptions s
              JOIN coach_packages cp ON cp.id = s.package_id
              WHERE s.coach_user_id = c.user_id AND s.status = 'active') AS revenue
@@ -137,6 +138,38 @@ def toggle_coach_active(
         raise HTTPException(404, "Koç bulunamadı")
     db.commit()
     return {"ok": True, "coach_user_id": row["user_id"], "is_active": row["is_active"]}
+
+
+@router.patch("/coaches/{coach_user_id}/referral-code")
+def set_coach_referral_code(
+    coach_user_id: int,
+    body: dict,
+    db=Depends(get_db),
+    user=Depends(require_role("superadmin")),
+):
+    """Set or update a coach's referral code. Send null to remove."""
+    import psycopg2
+
+    code = body.get("referral_code")
+    if code is not None:
+        code = code.strip().upper()
+        if len(code) < 3 or len(code) > 20 or not code.isalnum():
+            raise HTTPException(400, "Kod 3-20 karakter, sadece harf ve rakam olmalı.")
+
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            "UPDATE coaches SET referral_code = %s WHERE user_id = %s RETURNING user_id, referral_code",
+            (code, coach_user_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Koç bulunamadı")
+        db.commit()
+        return {"ok": True, "coach_user_id": row["user_id"], "referral_code": row["referral_code"]}
+    except psycopg2.IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Bu referans kodu zaten kullanımda.")
 
 
 @router.get("/students")

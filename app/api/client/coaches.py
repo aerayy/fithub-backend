@@ -115,6 +115,62 @@ def get_coaches(
     }
 
 
+@router.get("/coaches/by-referral-code")
+def get_coach_by_referral_code(
+    code: str = Query(..., min_length=1, max_length=20, description="Coach referral code"),
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """
+    Look up a coach by their referral code. Case-insensitive.
+    Returns a lightweight coach preview if the code is valid, coach is active, and has packages.
+    """
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute(
+        """
+        SELECT
+            c.user_id,
+            u.full_name,
+            COALESCE(c.photo_url, u.profile_photo_url) AS photo_url,
+            c.rating,
+            c.rating_count,
+            c.specialties,
+            c.is_active
+        FROM coaches c
+        JOIN users u ON u.id = c.user_id
+        WHERE UPPER(c.referral_code) = UPPER(%s)
+        """,
+        (code.strip(),)
+    )
+    row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Geçersiz referans kodu.")
+
+    if not row["is_active"]:
+        raise HTTPException(status_code=404, detail="Bu koç şu anda aktif değil.")
+
+    # Check if coach has at least one active package
+    cur.execute(
+        "SELECT COUNT(*) as cnt FROM coach_packages WHERE coach_user_id = %s AND is_active = TRUE",
+        (row["user_id"],)
+    )
+    pkg_count = cur.fetchone()["cnt"]
+    if pkg_count == 0:
+        raise HTTPException(status_code=404, detail="Bu koçun aktif paketi bulunmuyor.")
+
+    return {
+        "ok": True,
+        "coach_user_id": row["user_id"],
+        "full_name": row.get("full_name"),
+        "photo_url": row.get("photo_url"),
+        "rating": float(row["rating"]) if row.get("rating") is not None else None,
+        "rating_count": row.get("rating_count") or 0,
+        "specialties": row.get("specialties") or [],
+    }
+
+
 @router.get("/coaches/{coach_user_id}")
 def get_coach_detail(
     coach_user_id: int,
