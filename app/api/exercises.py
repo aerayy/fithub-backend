@@ -71,7 +71,7 @@ def get_exercise_detail(
 
     _FIELDS = """id, external_id, canonical_name, level, equipment, category,
                  primary_muscles, secondary_muscles, instructions,
-                 instructions_tr, tips, image_urls, gif_url"""
+                 instructions_tr, tips, tips_tr, image_urls, gif_url"""
 
     row = None
 
