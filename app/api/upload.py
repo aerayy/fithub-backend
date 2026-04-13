@@ -2,7 +2,7 @@
 Image upload endpoint using Cloudinary.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from app.core.security import get_current_user
 from app.core.config import CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
 import cloudinary
@@ -18,14 +18,25 @@ cloudinary.config(
 )
 
 
+ALLOWED_FOLDERS = {
+    "chat": "fithub/chat",
+    "profile": "fithub/profile-photos",
+    "meal": "fithub/meal-photos",
+    "body-form": "fithub/body-form",
+}
+
+
 @router.post("/image")
 async def upload_image(
     file: UploadFile = File(...),
+    folder: str = Query("chat", description="Target folder: chat, profile, meal, body-form"),
     current_user=Depends(get_current_user),
 ):
     """Upload an image to Cloudinary. Returns URL and metadata."""
     if not CLOUDINARY_CLOUD_NAME:
         raise HTTPException(status_code=500, detail="Cloudinary not configured")
+
+    cloud_folder = ALLOWED_FOLDERS.get(folder, "fithub/chat")
 
     allowed_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
     if file.content_type not in allowed_types:
@@ -41,7 +52,7 @@ async def upload_image(
     try:
         result = cloudinary.uploader.upload(
             contents,
-            folder="fithub/messages",
+            folder=cloud_folder,
             resource_type="image",
             transformation=[
                 {"width": 1200, "height": 1200, "crop": "limit"},

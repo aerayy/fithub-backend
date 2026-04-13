@@ -94,3 +94,18 @@ try:
     from . import reviews  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import body_form  # noqa: F401
+except Exception:
+    pass
+
+try:
+    from . import water_intake  # noqa: F401
+except Exception:
+    pass
+
+try:
+    from . import workout_sessions  # noqa: F401
+except Exception:
+    pass

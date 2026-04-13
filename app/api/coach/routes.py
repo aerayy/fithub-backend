@@ -13,55 +13,108 @@ from app.core.security import require_role
 from app.core.config import OPENAI_API_KEY
 from app.api.coach.students import router as students_router
 from app.api.coach.conversations import router as conversations_router
+from app.api.coach.body_form import router as body_form_router
 import re
 
 
 def _match_exercise_library(cur, exercise_name: str):
-    """Match exercise name to exercise_library, return id or None."""
+    """Match exercise name to exercise_library, return (id, canonical_name, gif_url) or None.
+    Prioritizes: exact match > word-overlap score > ILIKE contains.
+    Always prefers exercises WITH gif_url."""
     if not exercise_name:
         return None
 
+    name = exercise_name.strip()
+
     # 1. Exact match (case-insensitive)
     cur.execute(
-        "SELECT id FROM exercise_library WHERE canonical_name ILIKE %s LIMIT 1",
-        (exercise_name,)
+        "SELECT id, canonical_name, gif_url FROM exercise_library WHERE canonical_name ILIKE %s LIMIT 1",
+        (name,)
     )
     row = cur.fetchone()
     if row:
-        return row["id"] if isinstance(row, dict) else row[0]
+        return row
 
-    # 2. Fuzzy match - starts with
-    cur.execute(
-        """SELECT id FROM exercise_library
-           WHERE canonical_name ILIKE %s
-           ORDER BY CASE WHEN canonical_name ILIKE %s THEN 0 ELSE 1 END,
-                    length(canonical_name) ASC
-           LIMIT 1""",
-        (f"%{exercise_name}%", f"{exercise_name}%")
-    )
-    row = cur.fetchone()
-    if row:
-        return row["id"] if isinstance(row, dict) else row[0]
-
-    # 3. Normalize: remove parenthetical, try again
-    normalized = re.sub(r'\s*\([^)]*\)', '', exercise_name).strip()
-    if normalized != exercise_name:
+    # 2. Word-overlap scoring — split search into words, find best match
+    raw_words = [w.lower() for w in re.sub(r'[^a-zA-Z0-9\s]', '', name).split() if len(w) > 2]
+    # Simple stemming: remove trailing 's' for plural (Rows→Row, Curls→Curl, Flyes→Fly)
+    words = []
+    for w in raw_words:
+        words.append(w)
+        if w.endswith('s') and len(w) > 3:
+            words.append(w[:-1])
+        if w.endswith('es') and len(w) > 4:
+            words.append(w[:-2])
+        if w.endswith('ies') and len(w) > 5:
+            words.append(w[:-3] + 'y')
+    if words:
+        like_params = [f"%{w}%" for w in words]
+        score_expr = " + ".join(
+            ["(CASE WHEN canonical_name ILIKE %s THEN 1 ELSE 0 END)"] * len(words)
+        )
+        threshold = max(2, len(words)) if len(words) >= 2 else 1
+        # params: score_select, where_filter, order_score
+        all_params = like_params + like_params + [threshold] + like_params
         cur.execute(
-            """SELECT id FROM exercise_library
-               WHERE canonical_name ILIKE %s
-               ORDER BY length(canonical_name) ASC LIMIT 1""",
-            (f"%{normalized}%",)
+            f"""SELECT id, canonical_name, gif_url,
+                       ({score_expr}) AS word_score
+                FROM exercise_library
+                WHERE ({score_expr}) >= %s
+                ORDER BY
+                  (gif_url IS NOT NULL AND gif_url != '') DESC,
+                  ({score_expr}) DESC,
+                  length(canonical_name) ASC
+                LIMIT 1""",
+            all_params,
         )
         row = cur.fetchone()
         if row:
-            return row["id"] if isinstance(row, dict) else row[0]
+            return row
 
-    return None
+    # 3. Fallback: every original word (or its stem) must appear
+    if raw_words:
+        # For each original word, create an OR group with its stem variants
+        or_groups = []
+        fb_params = []
+        for w in raw_words:
+            variants = {w}
+            if w.endswith('s') and len(w) > 3:
+                variants.add(w[:-1])
+            if w.endswith('es') and len(w) > 4:
+                variants.add(w[:-2])
+            group = " OR ".join(["canonical_name ILIKE %s"] * len(variants))
+            or_groups.append(f"({group})")
+            fb_params.extend([f"%{v}%" for v in variants])
+        where_clauses = " AND ".join(or_groups)
+        cur.execute(
+            f"""SELECT id, canonical_name, gif_url FROM exercise_library
+                WHERE {where_clauses}
+                ORDER BY (gif_url IS NOT NULL AND gif_url != '') DESC,
+                         length(canonical_name) ASC
+                LIMIT 1""",
+            fb_params,
+        )
+        row = cur.fetchone()
+        if row:
+            return row
+
+    # 4. Last resort: single ILIKE on full normalized name
+    normalized = re.sub(r'\s*\([^)]*\)', '', name).strip()
+    cur.execute(
+        """SELECT id, canonical_name, gif_url FROM exercise_library
+           WHERE canonical_name ILIKE %s
+           ORDER BY (gif_url IS NOT NULL AND gif_url != '') DESC,
+                    length(canonical_name) ASC
+           LIMIT 1""",
+        (f"%{normalized}%",)
+    )
+    return cur.fetchone()
 
 
 router = APIRouter(prefix="/coach", tags=["coach"])
 router.include_router(students_router)
 router.include_router(conversations_router)
+router.include_router(body_form_router)
 
 # Predefined service tags (for future frontend use)
 PREDEFINED_SERVICE_TAGS = [
@@ -398,7 +451,9 @@ def save_workout_program(
             for ex_order, ex in enumerate(exercises_to_insert, start=1):
                 if isinstance(ex, dict):
                     ex_name = ex.get("name") or ""
-                    lib_id = _match_exercise_library(cur, ex_name)
+                    matched = _match_exercise_library(cur, ex_name)
+                    lib_id = matched["id"] if matched else None
+                    resolved_name = matched["canonical_name"] if matched else ex_name
                     cur.execute(
                         """
                         INSERT INTO workout_exercises
@@ -407,7 +462,7 @@ def save_workout_program(
                         """,
                         (
                             workout_day_id,
-                            ex_name,
+                            resolved_name,
                             ex.get("sets"),
                             ex.get("reps") or "",
                             ex.get("notes") or "",
@@ -553,6 +608,15 @@ def generate_workout_program(
             else:
                 focus_desc = f" Focus areas: {body_focus}."
 
+        # Fetch exercise names from DB for the AI to use
+        cur.execute(
+            """SELECT canonical_name FROM exercise_library
+               WHERE gif_url IS NOT NULL AND gif_url != ''
+               ORDER BY canonical_name""",
+        )
+        db_exercise_names = [r["canonical_name"] for r in cur.fetchall()]
+        exercise_list_sample = ", ".join(db_exercise_names[:200])
+
         prompt = f"""Generate a personalized workout program for a {age}-year-old {gender} client{f' named {client_name}' if client_name else ''}.
 
 Client Profile:
@@ -566,6 +630,9 @@ Client Profile:
 {safety_note}
 {focus_desc}
 
+IMPORTANT: You MUST use exercise names from this list (our exercise database):
+{exercise_list_sample}
+
 Generate a weekly workout program in JSON format. Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 {{
   "mon": [{{"name": "Exercise Name", "sets": 3, "reps": "8-10", "notes": "RPE 7"}}],
@@ -578,6 +645,7 @@ Generate a weekly workout program in JSON format. Return ONLY valid JSON (no mar
 }}
 
 Rules:
+- CRITICAL: Exercise names MUST exactly match names from the provided exercise database list
 - Each exercise must have: name (string), sets (integer), reps (string like "8-10" or "12"), notes (string)
 - Only include days with exercises (empty arrays for rest days)
 - Beginner-safe exercises only
@@ -612,18 +680,28 @@ Return ONLY the JSON object, nothing else."""
             if day_key in week_data:
                 day_exercises = week_data[day_key]
                 if isinstance(day_exercises, list):
-                    # Validate and normalize exercises
+                    # Validate, normalize, and match to exercise_library
                     for ex in day_exercises:
                         if isinstance(ex, dict):
-                            # Normalize reps for response (keep as string for display)
                             reps_raw = ex.get("reps", "8-10")
                             reps_str = str(reps_raw) if reps_raw else "8-10"
-                            
+                            ai_name = str(ex.get("name", ""))
+
+                            # Match to DB — get correct name + gif
+                            matched = _match_exercise_library(cur, ai_name)
+                            if matched:
+                                resolved_name = matched["canonical_name"]
+                                library_id = matched["id"]
+                            else:
+                                resolved_name = ai_name
+                                library_id = None
+
                             week[day_key].append({
-                                "name": str(ex.get("name", "")),
+                                "name": resolved_name,
                                 "sets": int(ex.get("sets", 3)) if ex.get("sets") else 3,
                                 "reps": reps_str,
                                 "notes": str(ex.get("notes", "")),
+                                "library_id": library_id,
                             })
 
         # Find or create draft program (overwrite existing draft)
@@ -730,7 +808,9 @@ Return ONLY the JSON object, nothing else."""
                     ex_name = str(ex.get("name", ""))
 
                     # Match to exercise_library for video + instructions
-                    lib_id = _match_exercise_library(cur, ex_name)
+                    matched = _match_exercise_library(cur, ex_name)
+                    lib_id = matched["id"] if matched else None
+                    resolved_name = matched["canonical_name"] if matched else ex_name
 
                     cur.execute(
                         """
@@ -740,7 +820,7 @@ Return ONLY the JSON object, nothing else."""
                         """,
                         (
                             workout_day_id,
-                            ex_name,
+                            resolved_name,
                             sets_db,
                             reps_db,
                             str(ex.get("notes", "")),

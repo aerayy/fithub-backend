@@ -20,13 +20,19 @@ def save_meal_photo(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
-    """Save meal photo record."""
+    """Save meal photo record and notify coach."""
     cur = db.cursor(cursor_factory=RealDictCursor)
 
-    # Get coach
-    cur.execute("SELECT assigned_coach_id FROM clients WHERE user_id = %s", (current_user["id"],))
-    client = cur.fetchone()
-    coach_id = client["assigned_coach_id"] if client else None
+    # Get coach + client name for notification
+    cur.execute(
+        """SELECT c.assigned_coach_id, u.full_name
+           FROM clients c JOIN users u ON u.id = c.user_id
+           WHERE c.user_id = %s""",
+        (current_user["id"],),
+    )
+    row = cur.fetchone()
+    coach_id = row["assigned_coach_id"] if row else None
+    client_name = row["full_name"] if row else "Öğrenci"
 
     cur.execute(
         """INSERT INTO meal_photos (client_user_id, coach_user_id, meal_label, photo_url, is_retake)
@@ -34,7 +40,23 @@ def save_meal_photo(
         (current_user["id"], coach_id, body.meal_label, body.photo_url, body.is_retake),
     )
     db.commit()
-    return {"ok": True, "id": cur.fetchone()["id"]}
+    photo_id = cur.fetchone()["id"]
+
+    # Notify coach via FCM push
+    if coach_id:
+        try:
+            from app.services.push_notification import send_notification
+            action = "güncelledi" if body.is_retake else "yükledi"
+            send_notification(
+                coach_id,
+                "Öğün Fotoğrafı",
+                f"{client_name} {body.meal_label} fotoğrafını {action}.",
+                {"type": "meal_photo", "client_user_id": str(current_user["id"])},
+            )
+        except Exception:
+            pass  # Push failure should not block the save
+
+    return {"ok": True, "id": photo_id}
 
 
 @router.get("/meal-photos")
