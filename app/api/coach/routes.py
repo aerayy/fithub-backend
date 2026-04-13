@@ -549,13 +549,14 @@ def generate_workout_program(
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Fetch client onboarding data and user email (for full_name fallback)
+    # Fetch client onboarding data
     cur.execute(
         """
-        SELECT 
+        SELECT
             co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
             co.experience, co.how_fit, co.knee_pain, co.body_part_focus,
             co.pref_workout_length, co.workout_place, co.full_name,
+            co.preferred_workout_days, co.target_weight_kg,
             u.email
         FROM client_onboarding co
         JOIN users u ON u.id = co.user_id
@@ -568,104 +569,192 @@ def generate_workout_program(
     if not client_data:
         raise HTTPException(status_code=404, detail="Client onboarding data not found")
 
-    # Check OpenAI API key
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
         from openai import OpenAI
     except ImportError:
-        raise HTTPException(status_code=500, detail="OpenAI library not installed. Please install openai package.")
-    
+        raise HTTPException(status_code=500, detail="OpenAI library not installed.")
+
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
 
-        # Build prompt for AI
-        age = client_data.get("age") or "unknown"
-        weight = client_data.get("weight_kg") or "unknown"
-        height = client_data.get("height_cm") or "unknown"
-        gender = client_data.get("gender") or "unknown"
+        # ── Extract onboarding data ──
+        age = client_data.get("age") or "bilinmiyor"
+        weight = client_data.get("weight_kg") or "bilinmiyor"
+        height = client_data.get("height_cm") or "bilinmiyor"
+        gender = client_data.get("gender") or "bilinmiyor"
         goal = client_data.get("your_goal") or "general fitness"
         experience = client_data.get("experience") or "beginner"
         fitness_level = client_data.get("how_fit") or "beginner"
         knee_pain = client_data.get("knee_pain")
         body_focus = client_data.get("body_part_focus")
-        workout_length = client_data.get("pref_workout_length") or "45-60 minutes"
+        workout_length = client_data.get("pref_workout_length") or "medium"
         workout_place = client_data.get("workout_place")
-        # Use full_name from client_onboarding, fallback to email
-        client_name = client_data.get("full_name") or client_data.get("email") or ""
+        preferred_days = client_data.get("preferred_workout_days")
+        target_weight = client_data.get("target_weight_kg")
+        client_name = client_data.get("full_name") or ""
 
-        # Safety note for knee pain
-        safety_note = ""
-        if knee_pain:
-            safety_note = " IMPORTANT: The client has knee pain. Avoid heavy knee-dominant exercises like deep squats, lunges, and leg presses. Focus on upper body, core, and low-impact lower body exercises."
+        # ── Parse preferred days ──
+        day_map = {
+            "Monday": "mon", "Tuesday": "tue", "Wednesday": "wed",
+            "Thursday": "thu", "Friday": "fri", "Saturday": "sat", "Sunday": "sun",
+        }
+        day_names_tr = {
+            "Monday": "Pazartesi", "Tuesday": "Salı", "Wednesday": "Çarşamba",
+            "Thursday": "Perşembe", "Friday": "Cuma", "Saturday": "Cumartesi", "Sunday": "Pazar",
+        }
+        if isinstance(preferred_days, list) and len(preferred_days) > 0:
+            selected_keys = [day_map.get(d, d.lower()[:3]) for d in preferred_days if d in day_map]
+            selected_names = [day_names_tr.get(d, d) for d in preferred_days if d in day_names_tr]
+            days_instruction = f"Öğrenci şu günleri seçti: {', '.join(selected_names)}. SADECE bu günlere antrenman koy, diğer günler boş array olsun."
+            num_days = len(selected_keys)
+        else:
+            days_instruction = "Öğrenci gün tercihi belirtmedi. Haftada 3-4 gün antrenman koy."
+            num_days = 4
 
-        # Build body focus description
+        # ── Parse workout place ──
+        if isinstance(workout_place, list):
+            places = ", ".join(workout_place) if workout_place else "gym"
+        else:
+            places = str(workout_place) if workout_place else "gym"
+
+        place_equipment = {
+            "gym": "Barbell, dumbbell, cable machine, smith machine, leg press ve tüm salon ekipmanları kullanılabilir.",
+            "home": "Sadece bodyweight ve varsa dumbbell. Makine/barbell/cable hareketi KULLANMA.",
+            "outdoor": "Bodyweight ağırlıklı, park barları kullanılabilir. Makine hareketi KULLANMA.",
+        }
+        equip_note = ""
+        for p in (workout_place if isinstance(workout_place, list) else [str(workout_place or "gym")]):
+            equip_note = place_equipment.get(p.lower().strip(), place_equipment["gym"])
+            break
+
+        # ── Parse workout length ──
+        length_map = {"short": "30-40 dakika (4-5 hareket)", "medium": "45-60 dakika (5-7 hareket)", "long": "60-75 dakika (7-9 hareket)"}
+        length_desc = length_map.get(str(workout_length).lower(), "45-60 dakika (5-7 hareket)")
+
+        # ── Parse body focus ──
         focus_desc = ""
-        if body_focus:
-            if isinstance(body_focus, dict):
-                focus_desc = f" Focus areas: {', '.join(body_focus.values()) if isinstance(body_focus, dict) else str(body_focus)}."
-            else:
-                focus_desc = f" Focus areas: {body_focus}."
+        if body_focus and isinstance(body_focus, list) and len(body_focus) > 0:
+            focus_desc = f"Öğrenci şu bölgelere odaklanmak istiyor: {', '.join(body_focus)}. Bu bölgelere ekstra hacim ver."
 
-        # Fetch exercise names from DB for the AI to use
+        # ── Parse goal ──
+        goal_map = {
+            "lose_weight": "Kilo vermek — Kalori yakımını artıran, süperset ve devre antrenmanları tercih et. Dinlenme süreleri kısa (30-45sn).",
+            "gain_muscle": "Kas geliştirmek — Ağır compound hareketler öncelikli, izolasyon ile destekle. Dinlenme 60-90sn.",
+            "get_toned": "Sıkılaşmak — Orta ağırlık, yüksek tekrar. Compound + izolasyon dengeli. Dinlenme 45-60sn.",
+        }
+        goal_desc = goal_map.get(goal, "Genel fitness — dengeli bir program.")
+
+        # ── Safety ──
+        safety_note = ""
+        if knee_pain and str(knee_pain).lower() in ("yes", "true", "1"):
+            safety_note = "DİKKAT: Öğrencinin diz ağrısı var. Derin squat, lunge, leg press gibi diz baskılı hareketlerden KAÇIN. Üst vücut, core ve düşük etkili alt vücut hareketleri tercih et."
+
+        # ── Experience mapping ──
+        exp_map = {
+            "no": "Hiç deneyimi yok — sadece temel, güvenli hareketler. Makine hareketleri tercih et.",
+            "yes_year_ago": "1 yıl önce spor yapmış — temel hareketleri bilir, orta zorluk uygun.",
+            "yes_more_year_ago": "Uzun süre önce yapmış — yeniden adapte olması lazım, orta-düşük zorluk.",
+            "regular_exercise": "Düzenli egzersiz yapıyor — compound hareketler ve progressive overload uygun.",
+        }
+        exp_desc = exp_map.get(experience, "Başlangıç seviyesi — güvenli hareketler.")
+
+        # ── Weight goal context ──
+        weight_note = ""
+        if target_weight and weight and weight != "bilinmiyor":
+            try:
+                diff = float(weight) - float(target_weight)
+                if diff > 5:
+                    weight_note = f"Öğrenci {diff:.0f} kg vermek istiyor ({weight}kg → {target_weight}kg)."
+                elif diff < -5:
+                    weight_note = f"Öğrenci {abs(diff):.0f} kg almak istiyor ({weight}kg → {target_weight}kg)."
+            except (ValueError, TypeError):
+                pass
+
+        # ── Fetch exercises from DB — categorized ──
         cur.execute(
-            """SELECT canonical_name FROM exercise_library
+            """SELECT canonical_name, equipment, level, category, primary_muscles
+               FROM exercise_library
                WHERE gif_url IS NOT NULL AND gif_url != ''
-               ORDER BY canonical_name""",
+               ORDER BY
+                 CASE WHEN level = 'beginner' THEN 0
+                      WHEN level = 'intermediate' THEN 1
+                      ELSE 2 END,
+                 canonical_name""",
         )
-        db_exercise_names = [r["canonical_name"] for r in cur.fetchall()]
-        exercise_list_sample = ", ".join(db_exercise_names[:200])
+        all_exercises = cur.fetchall()
 
-        prompt = f"""Generate a personalized workout program for a {age}-year-old {gender} client{f' named {client_name}' if client_name else ''}.
+        # Filter by workout place
+        gym_equipment = {'dumbbell', 'barbell', 'cable', 'machine', 'body only', 'e-z curl bar', 'kettlebells', 'bands', 'other', 'medicine ball', 'exercise ball'}
+        home_equipment = {'body only', 'dumbbell', 'bands', 'kettlebells'}
+        outdoor_equipment = {'body only', 'bands'}
 
-Client Profile:
-- Weight: {weight} kg
-- Height: {height} cm
-- Goal: {goal}
-- Experience level: {experience}
-- Current fitness level: {fitness_level}
-- Preferred workout length: {workout_length}
-- Workout place: {workout_place if workout_place else 'gym'}
+        if 'home' in places.lower():
+            allowed_equip = home_equipment
+        elif 'outdoor' in places.lower():
+            allowed_equip = outdoor_equipment
+        else:
+            allowed_equip = gym_equipment
+
+        filtered = [e for e in all_exercises if (e.get("equipment") or "").lower() in allowed_equip]
+        exercise_names = [e["canonical_name"] for e in filtered]
+        exercise_list_str = "\n".join(exercise_names)
+
+        prompt = f"""Sen deneyimli bir fitness koçusun. Aşağıdaki öğrenci profiline göre KİŞİSELLEŞTİRİLMİŞ haftalık antrenman programı oluştur.
+
+═══ ÖĞRENCİ PROFİLİ ═══
+- İsim: {client_name or 'Belirtilmedi'}
+- Yaş: {age} | Cinsiyet: {gender}
+- Kilo: {weight} kg | Boy: {height} cm
+- {weight_note}
+- Hedef: {goal_desc}
+- Deneyim: {exp_desc}
+- Antrenman yeri: {places} → {equip_note}
+- Tercih edilen antrenman süresi: {length_desc}
+- {focus_desc}
 {safety_note}
-{focus_desc}
 
-IMPORTANT: You MUST use exercise names from this list (our exercise database):
-{exercise_list_sample}
+═══ GÜN TERCİHİ ═══
+{days_instruction}
 
-Generate a weekly workout program in JSON format. Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+═══ EGZERSİZ VERİTABANI ═══
+Aşağıdaki listeden SEÇ. Kendi egzersiz ismi UYDURMA. Birebir bu isimlerden kullan:
+
+{exercise_list_str}
+
+═══ KURALLAR ═══
+1. Egzersiz isimleri YUKARIDAKI LİSTEDEN BİREBİR KOPYALANMALI
+2. Her gün için antrenmanı mantıklı kas gruplarına böl (Push/Pull/Legs, Upper/Lower, Full Body vb.)
+3. Her antrenman {length_desc} sürmeli
+4. Compound (çok eklemli) hareketler önce, izolasyon hareketleri sonra
+5. Her antrenmanın başında 1 ısınma hareketi (hafif, düşük set)
+6. Notes alanına: RPE (zorluk), tempo, veya teknik ipucu yaz
+7. Popüler, temel hareketleri tercih et (Bench Press, Squat, Deadlift, Row, Pulldown vb.)
+8. Garip, nadir hareketler KULLANMA — her spor salonunda yapılabilecek hareketler seç
+
+═══ ÇIKTI FORMATI ═══
+Sadece JSON döndür, başka hiçbir şey yazma:
 {{
-  "mon": [{{"name": "Exercise Name", "sets": 3, "reps": "8-10", "notes": "RPE 7"}}],
+  "mon": [{{"name": "Exact Exercise Name", "sets": 3, "reps": "8-10", "notes": "RPE 7"}}],
   "tue": [],
   "wed": [],
   "thu": [],
   "fri": [],
   "sat": [],
   "sun": []
-}}
-
-Rules:
-- CRITICAL: Exercise names MUST exactly match names from the provided exercise database list
-- Each exercise must have: name (string), sets (integer), reps (string like "8-10" or "12"), notes (string)
-- Only include days with exercises (empty arrays for rest days)
-- Beginner-safe exercises only
-- If knee pain is mentioned, avoid knee-dominant movements
-- Focus on compound movements
-- Progressive overload appropriate for {experience} level
-- Total 3-5 workout days per week
-- Each workout should be {workout_length}
-
-Return ONLY the JSON object, nothing else."""
+}}"""
 
         # Call OpenAI
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a professional fitness coach. Generate safe, effective workout programs in JSON format only."},
+                {"role": "system", "content": "Sen profesyonel bir fitness koçusun. Öğrencinin profiline, deneyimine ve tercihlerine göre kişiselleştirilmiş, güvenli ve etkili antrenman programları oluşturursun. Sadece JSON formatında yanıt ver."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.7,
+            temperature=0.85,
         )
 
         # Parse response
