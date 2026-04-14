@@ -59,6 +59,26 @@ def save_meal_photo(
     return {"ok": True, "id": photo_id}
 
 
+@router.get("/meal-photos/today")
+def get_today_meal_photos(
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """Get client's meal photos uploaded today."""
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """SELECT id, meal_label, photo_url, is_retake, created_at
+           FROM meal_photos
+           WHERE client_user_id = %s AND created_at::date = CURRENT_DATE
+           ORDER BY created_at ASC""",
+        (current_user["id"],),
+    )
+    rows = cur.fetchall()
+    for r in rows:
+        r["created_at"] = r["created_at"].isoformat() if r.get("created_at") else None
+    return {"photos": rows}
+
+
 @router.get("/meal-photos")
 def get_my_meal_photos(
     limit: int = 20,
