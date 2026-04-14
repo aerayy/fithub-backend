@@ -56,6 +56,20 @@ def save_meal_photo(
         except Exception:
             pass  # Push failure should not block the save
 
+    # Activity log
+    try:
+        from app.services.activity_log import log_activity
+        action = "güncelledi" if body.is_retake else "yükledi"
+        log_activity(
+            client_user_id=current_user["id"],
+            coach_user_id=coach_id,
+            action_type="meal_photo",
+            title=f"{client_name} {body.meal_label} fotoğrafını {action}",
+            photo_url=body.photo_url,
+        )
+    except Exception:
+        pass
+
     return {"ok": True, "id": photo_id}
 
 

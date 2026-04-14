@@ -14,6 +14,7 @@ from app.core.config import OPENAI_API_KEY
 from app.api.coach.students import router as students_router
 from app.api.coach.conversations import router as conversations_router
 from app.api.coach.body_form import router as body_form_router
+from app.api.coach.activity import router as activity_router
 import re
 
 
@@ -115,6 +116,7 @@ router = APIRouter(prefix="/coach", tags=["coach"])
 router.include_router(students_router)
 router.include_router(conversations_router)
 router.include_router(body_form_router)
+router.include_router(activity_router)
 
 # Predefined service tags (for future frontend use)
 PREDEFINED_SERVICE_TAGS = [

@@ -39,7 +39,23 @@ def save_body_form_photo(
         (current_user["id"], coach_id, body.angle, body.photo_url),
     )
     db.commit()
-    return {"ok": True, "id": cur.fetchone()["id"]}
+    photo_id = cur.fetchone()["id"]
+
+    # Activity log
+    angle_labels = {"front": "Ön", "back": "Arka", "left_side": "Sol Yan", "right_side": "Sağ Yan"}
+    try:
+        from app.services.activity_log import log_activity
+        log_activity(
+            client_user_id=current_user["id"],
+            coach_user_id=coach_id,
+            action_type="form_photo",
+            title=f"Form fotoğrafı yükledi ({angle_labels.get(body.angle, body.angle)})",
+            photo_url=body.photo_url,
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "id": photo_id}
 
 
 @router.get("/body-form-photos")

@@ -71,6 +71,39 @@ def finish_workout(
     )
     db.commit()
     row = cur.fetchone()
+
+    # Activity log + push notification
+    try:
+        cur.execute("SELECT assigned_coach_id FROM clients WHERE user_id = %s", (uid,))
+        client = cur.fetchone()
+        coach_id = client["assigned_coach_id"] if client else None
+
+        cur.execute("SELECT full_name FROM users WHERE id = %s", (uid,))
+        u = cur.fetchone()
+        name = u["full_name"] if u else "Öğrenci"
+
+        day_labels = {"mon": "Pazartesi", "tue": "Salı", "wed": "Çarşamba", "thu": "Perşembe", "fri": "Cuma", "sat": "Cumartesi", "sun": "Pazar"}
+        day_label = day_labels.get(body.day_key, body.day_key)
+
+        from app.services.activity_log import log_activity
+        log_activity(
+            client_user_id=uid,
+            coach_user_id=coach_id,
+            action_type="workout_complete",
+            title=f"{name} {day_label} antrenmanını tamamladı",
+        )
+
+        if coach_id:
+            from app.services.push_notification import send_notification
+            send_notification(
+                coach_id,
+                "Antrenman Tamamlandı",
+                f"{name} {day_label} antrenmanını tamamladı.",
+                {"type": "workout_complete", "client_user_id": str(uid)},
+            )
+    except Exception:
+        pass
+
     return {
         "completed_ids": row["completed_ids"] if row else [],
         "is_finished": row["is_finished"] if row else True,
