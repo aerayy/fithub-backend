@@ -2810,3 +2810,10 @@ def delete_cardio_program(
 
     db.commit()
     return {"message": "Kardiyo programı silindi"}
+
+
+# ── Import meal_photos to register its routes on this router ──
+try:
+    from . import meal_photos  # noqa: F401
+except Exception:
+    pass
