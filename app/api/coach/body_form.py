@@ -8,11 +8,15 @@ from app.core.security import require_role
 router = APIRouter()
 
 
-def _verify_ownership(cur, student_user_id, coach_id):
+def _verify_ownership(cur, student_user_id, current_user):
+    # Superadmin bypasses ownership check
+    if current_user.get("role") == "superadmin":
+        return
+    coach_id = current_user["id"]
     cur.execute(
         """SELECT 1 FROM clients WHERE user_id = %s AND assigned_coach_id = %s
            UNION
-           SELECT 1 FROM subscriptions WHERE student_user_id = %s AND coach_user_id = %s AND status = 'active'""",
+           SELECT 1 FROM subscriptions WHERE client_user_id = %s AND coach_user_id = %s AND status = 'active'""",
         (student_user_id, coach_id, student_user_id, coach_id),
     )
     if not cur.fetchone():
@@ -23,11 +27,11 @@ def _verify_ownership(cur, student_user_id, coach_id):
 def get_student_body_form_photos(
     student_user_id: int,
     db=Depends(get_db),
-    current_user=Depends(require_role("coach")),
+    current_user=Depends(require_role("coach", "superadmin")),
 ):
     """Get a student's latest body form photos."""
     cur = db.cursor(cursor_factory=RealDictCursor)
-    _verify_ownership(cur, student_user_id, current_user["id"])
+    _verify_ownership(cur, student_user_id, current_user)
 
     cur.execute("SELECT COALESCE(full_name, email) AS name FROM users WHERE id = %s", (student_user_id,))
     user_row = cur.fetchone()
@@ -72,11 +76,11 @@ def get_student_body_form_photos(
 def get_student_body_form_history(
     student_user_id: int,
     db=Depends(get_db),
-    current_user=Depends(require_role("coach")),
+    current_user=Depends(require_role("coach", "superadmin")),
 ):
     """Get all form photo sets grouped by batch_date for timeline/comparison."""
     cur = db.cursor(cursor_factory=RealDictCursor)
-    _verify_ownership(cur, student_user_id, current_user["id"])
+    _verify_ownership(cur, student_user_id, current_user)
 
     cur.execute(
         """SELECT id, angle, photo_url, created_at, batch_date
@@ -122,11 +126,11 @@ def set_form_frequency(
     student_user_id: int,
     body: FrequencyInput,
     db=Depends(get_db),
-    current_user=Depends(require_role("coach")),
+    current_user=Depends(require_role("coach", "superadmin")),
 ):
     """Set how often the student should upload form photos."""
     cur = db.cursor(cursor_factory=RealDictCursor)
-    _verify_ownership(cur, student_user_id, current_user["id"])
+    _verify_ownership(cur, student_user_id, current_user)
 
     freq = max(7, min(90, body.frequency_days))  # clamp 7-90 days
     cur.execute(
