@@ -1546,15 +1546,20 @@ SADECE bu listeden seç, isim UYDURMA:
 ═══ PROGRAM KURALLARI ═══
 1. Her gün {meal_count} öğün — koç örneklerindeki gibi isimlendir
 2. Besin isimleri VERİTABANINDAN BİREBİR KOPYALANMALI
-3. Her günün toplam makroları hedefe %5 sapma ile uysun
-4. Birim "g" olanlarda: gram yaz, makroyu orantıla (100g'da 116kcal → 200g = 232kcal)
-5. Birim "adet/porsiyon" olanlarda: adedi grams alanına yaz
+3. KRİTİK: Her öğünde EN AZ 3-5 BESİN olmalı — tek besin koyma! Gerçek bir yemek tabağı gibi düşün:
+   - Protein kaynağı (et/tavuk/balık/yumurta)
+   - Karbonhidrat kaynağı (pirinç/makarna/patates/ekmek)
+   - Sebze/salata
+   - Yağ kaynağı (zeytinyağı/ceviz/avokado)
+4. Birim "g" olanlarda miktarı gram olarak yaz (50, 100, 150, 200 gibi)
+5. Birim "adet/porsiyon/dilim" olanlarda adedi yaz
 6. Günler arası çeşitlilik sağla — aynı yemeği her gün koyma
-7. Türk mutfağına uygun, pratik ve hazırlanması kolay yemekler
+7. Türk mutfağına uygun, pratik yemekler
 8. Saatler gerçekçi olsun (07:00 - 23:00 arası)
+9. Makro hesabı YAPMA — sadece isim ve miktar yaz, makroyu biz hesaplarız
 
 ═══ ÇIKTI FORMATI ═══
-Sadece JSON döndür:
+Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
 {{
   "week": {{
     "mon": {{
@@ -1563,7 +1568,11 @@ Sadece JSON döndür:
           "type": "1. ÖĞÜN KAHVALTI",
           "time": "08:00",
           "items": [
-            {{"name_tr": "Yulaf Ezmesi", "grams": 80, "calories": 294, "protein": 8.8, "carbs": 45.6, "fat": 7.2}}
+            {{"name_tr": "Yumurta Beyazı", "amount": 5, "unit": "adet"}},
+            {{"name_tr": "Yumurta Sarısı", "amount": 2, "unit": "adet"}},
+            {{"name_tr": "Basmati Pirinç", "amount": 80, "unit": "g"}},
+            {{"name_tr": "Sebze Salatası", "amount": 40, "unit": "g"}},
+            {{"name_tr": "Zeytin yağı", "amount": 1, "unit": "Yemek Kaşığı"}}
           ]
         }}
       ]
@@ -1591,6 +1600,52 @@ Sadece JSON döndür:
         )
         result = json.loads(response.choices[0].message.content)
         week_data = result.get("week", {})
+
+        # Build food lookup from DB for macro calculation
+        food_lookup = {}
+        for f in db_foods:
+            name = (f["name"] or "").strip().lower()
+            if name:
+                food_lookup[name] = {
+                    "cal": float(f.get("cal") or 0),
+                    "prot": float(f.get("prot") or 0),
+                    "carb": float(f.get("carb") or 0),
+                    "fat": float(f.get("fat") or 0),
+                    "unit": f.get("serving_unit") or "g",
+                }
+
+        # Enrich AI output with calculated macros from DB
+        for day_key, day_data in week_data.items():
+            if not isinstance(day_data, dict):
+                continue
+            for meal in day_data.get("meals", []):
+                for item in meal.get("items", []):
+                    name_tr = (item.get("name_tr") or "").strip()
+                    lookup_key = name_tr.lower()
+                    db_food = food_lookup.get(lookup_key)
+
+                    if db_food:
+                        amount = float(item.get("amount") or item.get("grams") or 100)
+                        unit = item.get("unit") or db_food["unit"]
+
+                        if unit == "g":
+                            ratio = amount / 100.0
+                        else:
+                            ratio = amount  # adet/porsiyon — makrolar zaten 1 birim için
+
+                        item["grams"] = amount
+                        item["calories"] = round(db_food["cal"] * ratio, 1)
+                        item["protein"] = round(db_food["prot"] * ratio, 1)
+                        item["carbs"] = round(db_food["carb"] * ratio, 1)
+                        item["fat"] = round(db_food["fat"] * ratio, 1)
+                    else:
+                        # Not found in DB — keep as is with 0 macros
+                        item["grams"] = float(item.get("amount") or item.get("grams") or 0)
+                        item.setdefault("calories", 0)
+                        item.setdefault("protein", 0)
+                        item.setdefault("carbs", 0)
+                        item.setdefault("fat", 0)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI beslenme programı oluşturulamadı: {str(e)}")
 
