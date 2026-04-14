@@ -77,7 +77,7 @@ def get_body_form_status(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
-    """Lightweight status check for popup logic."""
+    """Status check: completion + frequency + whether new photos are due."""
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute(
         """SELECT COUNT(DISTINCT angle) AS cnt,
@@ -89,8 +89,32 @@ def get_body_form_status(
     row = cur.fetchone()
     cnt = row["cnt"] if row else 0
     last = row["last_updated"].isoformat() if row and row["last_updated"] else None
+
+    # Check frequency setting — is a new form due?
+    form_due = False
+    frequency_days = 30
+    cur.execute(
+        "SELECT frequency_days FROM form_analysis_settings WHERE client_user_id = %s",
+        (current_user["id"],),
+    )
+    freq_row = cur.fetchone()
+    if freq_row:
+        frequency_days = freq_row["frequency_days"]
+
+    if last:
+        from datetime import datetime, timedelta
+        try:
+            last_dt = datetime.fromisoformat(last)
+            form_due = datetime.now(last_dt.tzinfo) - last_dt > timedelta(days=frequency_days)
+        except Exception:
+            form_due = True
+    else:
+        form_due = True  # Never uploaded
+
     return {
         "completed_angles": cnt,
         "is_complete": cnt == 4,
         "last_updated": last,
+        "frequency_days": frequency_days,
+        "form_due": form_due,
     }

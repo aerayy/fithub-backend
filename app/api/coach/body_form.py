@@ -132,7 +132,7 @@ def set_form_frequency(
     cur = db.cursor(cursor_factory=RealDictCursor)
     _verify_ownership(cur, student_user_id, current_user)
 
-    freq = max(7, min(90, body.frequency_days))  # clamp 7-90 days
+    freq = max(7, min(90, body.frequency_days))
     cur.execute(
         """INSERT INTO form_analysis_settings (client_user_id, coach_user_id, frequency_days)
            VALUES (%s, %s, %s)
@@ -141,3 +141,33 @@ def set_form_frequency(
     )
     db.commit()
     return {"ok": True, "frequency_days": freq}
+
+
+@router.post("/students/{student_user_id}/body-form-request")
+def request_form_photos(
+    student_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach", "superadmin")),
+):
+    """Coach manually requests form photos from student — sends push notification."""
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    _verify_ownership(cur, student_user_id, current_user)
+
+    # Get coach name
+    cur.execute("SELECT full_name FROM users WHERE id = %s", (current_user["id"],))
+    coach_row = cur.fetchone()
+    coach_name = coach_row["full_name"] if coach_row else "Koçunuz"
+
+    # Send push notification
+    try:
+        from app.services.push_notification import send_notification
+        send_notification(
+            student_user_id,
+            "Form Fotoğrafı İstendi",
+            f"{coach_name} güncel form fotoğraflarınızı bekliyor.",
+            {"type": "form_request"},
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "message": "Bildirim gönderildi"}
