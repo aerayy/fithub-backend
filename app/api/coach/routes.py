@@ -702,15 +702,31 @@ def generate_workout_program(
         exercise_names = [e["canonical_name"] for e in filtered]
         exercise_list_str = "\n".join(exercise_names)
 
-        # Load real coach program examples
-        coach_examples = ""
-        try:
-            examples_path = os.path.join(os.path.dirname(__file__), '../../data/coach_examples_for_prompt.txt')
-            if os.path.exists(examples_path):
-                with open(examples_path, 'r', encoding='utf-8') as ef:
-                    coach_examples = ef.read()
-        except Exception:
-            pass
+        # RAG: Find similar client profiles and their real coach programs
+        from app.services.rag_matcher import find_similar_programs, format_similar_programs_for_prompt
+
+        target_for_rag = goal.replace("get_toned", "gain_muscle")  # normalize
+        similar = find_similar_programs(
+            age=int(age) if str(age).isdigit() else 25,
+            weight=float(weight) if str(weight).replace('.', '').isdigit() else 70,
+            height=float(height) if str(height).replace('.', '').isdigit() else 170,
+            target=target_for_rag,
+            gym="home" if "home" in str(places).lower() else "gym",
+            activity="moderate",
+            top_n=2,
+            program_type="training",
+        )
+        coach_examples = format_similar_programs_for_prompt(similar, "training")
+
+        # Fallback to static examples if RAG returns nothing
+        if not coach_examples:
+            try:
+                examples_path = os.path.join(os.path.dirname(__file__), '../../data/coach_examples_for_prompt.txt')
+                if os.path.exists(examples_path):
+                    with open(examples_path, 'r', encoding='utf-8') as ef:
+                        coach_examples = ef.read()
+            except Exception:
+                pass
 
         prompt = f"""Sen deneyimli bir fitness koçusun. Aşağıdaki öğrenci profiline göre KİŞİSELLEŞTİRİLMİŞ haftalık antrenman programı oluştur.
 
@@ -728,14 +744,6 @@ def generate_workout_program(
 
 ═══ GÜN TERCİHİ ═══
 {days_instruction}
-
-═══ GERÇEK KOÇ PROGRAM ÖRNEKLERİ ═══
-Aşağıda profesyonel bir koçun gerçek öğrencilerine yazdığı programlar var. BU TARZI TAKLİT ET:
-- Kas grubu eşleştirme mantığını (Göğüs+Arka Kol, Kanat+Sırt+Ön Kol, Omuz+Trapez vb.)
-- Egzersiz sıralamasını (compound önce, izolasyon sonra, core/mekik en son)
-- Set/tekrar aralıklarını (genelde 4×10-15)
-- Birleşik Set (süperset) kullanımını — her günde 2-3 süperset olmalı
-- Her antrenmanın sonunda core/mekik hareketleri
 
 {coach_examples}
 
@@ -1463,15 +1471,36 @@ def generate_nutrition_program(
 
     food_catalog = "\n".join(food_lines)
 
-    # Load real coach nutrition examples
-    nutrition_examples = ""
-    try:
-        ex_path = os.path.join(os.path.dirname(__file__), '../../data/nutrition_examples_for_prompt.txt')
-        if os.path.exists(ex_path):
-            with open(ex_path, 'r', encoding='utf-8') as ef:
-                nutrition_examples = ef.read()
-    except Exception:
-        pass
+    # RAG: Find similar profiles for nutrition examples
+    from app.services.rag_matcher import find_similar_programs, format_similar_programs_for_prompt
+
+    target_for_rag = str(goal).lower().replace("genel sağlık", "maintain")
+    if "lose" in target_for_rag or "kilo ver" in target_for_rag:
+        target_for_rag = "lose_weight"
+    elif "gain" in target_for_rag or "kas" in target_for_rag:
+        target_for_rag = "gain_muscle"
+
+    similar_nutr = find_similar_programs(
+        age=int(age) if str(age).isdigit() else 25,
+        weight=float(w),
+        height=float(h),
+        target=target_for_rag,
+        gym="gym",
+        activity="moderate",
+        top_n=2,
+        program_type="nutrition",
+    )
+    nutrition_examples = format_similar_programs_for_prompt(similar_nutr, "nutrition")
+
+    # Fallback to static examples
+    if not nutrition_examples:
+        try:
+            ex_path = os.path.join(os.path.dirname(__file__), '../../data/nutrition_examples_for_prompt.txt')
+            if os.path.exists(ex_path):
+                with open(ex_path, 'r', encoding='utf-8') as ef:
+                    nutrition_examples = ef.read()
+        except Exception:
+            pass
 
     # Diet type descriptions
     diet_descs = {
