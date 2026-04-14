@@ -96,3 +96,23 @@ def get_today_session(
         "completed_ids": row["completed_ids"] if row else [],
         "is_finished": row["is_finished"] if row else False,
     }
+
+
+@router.get("/workout-sessions/week")
+def get_week_sessions(
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """Get this week's finished days (mon-sun). Returns which days are completed."""
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """SELECT day_key, is_finished
+           FROM workout_sessions
+           WHERE user_id = %s
+             AND session_date >= date_trunc('week', CURRENT_DATE)
+             AND session_date < date_trunc('week', CURRENT_DATE) + interval '7 days'""",
+        (current_user["id"],),
+    )
+    rows = cur.fetchall()
+    finished_days = {r["day_key"]: r["is_finished"] for r in rows}
+    return {"finished_days": finished_days}
