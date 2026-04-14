@@ -1,0 +1,113 @@
+── ÖRNEK BESLENME PROGRAMI ──
+  07:30:00 | KAHVALTIDAN ÖNCE YAPILACAK:
+    • Sade Soda 1.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • nac 600 1.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • limon 1.0adet → 43.0kcal P:0.0g K:8.0g Y:0.0g
+    • Sirke 1.0Yemek Kaşığı → 1.0kcal P:0.0g K:0.0g Y:0.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Gilabura ve Enginar suyu 1.0Porsiyon → 1.0kcal P:0.0g K:0.0g Y:0.0g
+  08:00:00 | 1. ÖĞÜN KAHVALTI:
+    • Yumurta Beyazı 7.0adet → 112.0kcal P:28.0g K:0.0g Y:0.0g
+    • Yumurta Sarısı 5.0adet → 320.0kcal P:15.0g K:0.0g Y:26.0g
+    • Sebze Salatası 40.0gr → 12.0kcal P:0.0g K:1.0g Y:0.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Zeytin yağı 1.0Yemek Kaşığı → 119.0kcal P:0.0g K:0.0g Y:13.0g
+  08:20:00 | KAHVALTIDAN SONRA ALINACAKLAR:
+    • Multivitamine 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • 1000 Mg Ester C vitamini 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • E vitamini 600 iu 1.0adet → 1.0kcal P:0.0g K:0.0g Y:0.0g
+    • Calcium 600 800 mg 1.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Cystone 2.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Liv 52 2.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  11:00:00 | 2. ÖĞÜN:
+    • Yağsız Dana Kıyma 150.0gr → 303.0kcal P:27.0g K:0.0g Y:20.0g
+    • Baldo Pirinç 150.0gr → 525.0kcal P:10.0g K:116.0g Y:0.0g
+    • Salatalık 1.0adet → 18.0kcal P:0.0g K:4.0g Y:0.0g
+    • Kapya Biber 1.0adet → 19.0kcal P:0.0g K:3.0g Y:0.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Cla 1.0adet → 9.0kcal P:0.0g K:0.0g Y:1.0g
+  13:30:00 | 3. ÖĞÜN:
+    • Yağsız Dana Kıyma 180.0gr → 363.0kcal P:33.0g K:0.0g Y:24.0g
+    • Patates 600.0gr → 456.0kcal P:12.0g K:102.0g Y:0.0g
+    • Zeytin yağı 1.0Yemek Kaşığı → 119.0kcal P:0.0g K:0.0g Y:13.0g
+    • Salatalık 1.0adet → 18.0kcal P:0.0g K:4.0g Y:0.0g
+    • Yeşil Biber 1.0adet → 14.0kcal P:0.0g K:3.0g Y:0.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Chromium Picolinate 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • nac 600 1.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  15:30:00 | 4. ÖĞÜN:
+    • Hindi Göğüs 150.0gr → 174.0kcal P:31.0g K:0.0g Y:5.0g
+    • Baldo Pirinç 100.0gr → 350.0kcal P:6.0g K:77.0g Y:0.0g
+    • Yeşillik Salatası 40.0gr → 30.0kcal P:0.0g K:2.0g Y:1.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  18:00:00 | 5. ÖĞÜN ANTRENMANDAN 1.5 2 SAAT ÖNCEKİ ÖĞÜN:
+    • Kırmızı Et 180.0gr → 412.0kcal P:53.0g K:0.0g Y:20.0g
+    • Sebze Salatası 50.0gr → 15.0kcal P:0.0g K:1.0g Y:0.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Yulaf 50.0gr → 175.0kcal P:5.0g K:28.0g Y:2.0g
+    • Cla 1.0adet → 9.0kcal P:0.0g K:0.0g Y:1.0g
+  19:30:00 | SPORDAN 30 DK ÖNCE ALINACAKLAR:
+    • Pre-workout 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Bcaa 1 porsiyon 1.0Porsiyon → 36.0kcal P:0.0g K:0.0g Y:0.0g
+    • Sade Soda 1.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Limon 1.0yarım adet → 43.0kcal P:0.0g K:8.0g Y:0.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  22:05:00 | SPORDAN SONRA ALINACAKLAR:
+    • Gainer 1.0Servis → 190.0kcal P:0.0g K:47.0g Y:0.0g
+    • Glutamine 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Omega 3 1000 mg 1.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  22:30:00 | 6. ÖĞÜN ANTRENMANDAN SONRAKİ ÖĞÜN:
+    • Yumurta Beyazı 5.0adet → 80.0kcal P:20.0g K:0.0g Y:0.0g
+    • Basmati Pirinç 100.0gr → 350.0kcal P:80.0g K:8.0g Y:0.0g
+    • Yeşillik Salatası 40.0gr → 30.0kcal P:0.0g K:2.0g Y:1.0g
+    • Zeytin yağı 1.0Yemek Kaşığı → 119.0kcal P:0.0g K:0.0g Y:13.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  23:55:00 | GECE YATMADAN ÖNCE ALINACAKLAR:
+    • Glutamine 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Zma 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Çinko 1 servis 50 mg 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • D vitamini 2000 iu 1.0adet → 1.0kcal P:0.0g K:0.0g Y:0.0g
+    • Gün Aşırı 1 Arimidex 1.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Cystone 2.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Liv 52 2.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+
+── ÖRNEK BESLENME PROGRAMI ──
+  07:00:00 | KAHVALTIDAN ÖNCE YAPILACAK:
+    • 1 Bardak Su 1.0Porsiyon → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • limon 1.0adet → 43.0kcal P:0.0g K:8.0g Y:0.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Cla 1.0adet → 9.0kcal P:0.0g K:0.0g Y:1.0g
+  09:00:00 | 1. ÖĞÜN KAHVALTI:
+    • Yumurta Beyazı 2.0adet → 32.0kcal P:8.0g K:0.0g Y:0.0g
+    • Yumurta Sarısı 1.0adet → 64.0kcal P:3.0g K:0.0g Y:5.0g
+    • Salatalık 1.0adet → 18.0kcal P:0.0g K:4.0g Y:0.0g
+    • zeytin 2.0adet → 16.0kcal P:0.0g K:0.0g Y:1.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  09:20:00 | KAHVALTIDAN SONRA ALINACAKLAR:
+    • Multivitamine 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • 1000 Mg Ester C vitamini 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  10:30:00 | 2.ÖĞÜN:
+    • sade activia 1.0adet → 64.0kcal P:3.0g K:4.0g Y:3.0g
+    • Tarçın 1.0gr → 2.0kcal P:0.0g K:0.0g Y:0.0g
+  13:00:00 | 2. ÖĞÜN:
+    • Zeytin yağı 1.0Yemek Kaşığı → 119.0kcal P:0.0g K:0.0g Y:13.0g
+    • Limon 1.0yarım adet → 43.0kcal P:0.0g K:8.0g Y:0.0g
+    • Tuz 1.0gr → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  14:30:00 | ARA ÖĞÜN:
+    • Hurma 1.0adet → 23.0kcal P:0.0g K:6.0g Y:0.0g
+    • Ceviz 1.0adet → 26.0kcal P:0.0g K:0.0g Y:2.0g
+  17:30:00 | 3.ÖĞÜN ANTRENMANDAN 2 -2,5 SAAT ÖNCEKİ ÖĞÜN:
+    • Kepekli Pirinç 40.0gr → 140.0kcal P:2.0g K:29.0g Y:0.0g
+    • Kapya Biber 1.0adet → 19.0kcal P:0.0g K:3.0g Y:0.0g
+    • Salatalık 1.0adet → 18.0kcal P:0.0g K:4.0g Y:0.0g
+  19:30:00 | SPORDAN 30 DK ÖNCE ALINACAKLAR:
+    • kabuklu tuzsuz fıstık 10.0adet → 60.0kcal P:2.0g K:1.0g Y:4.0g
+  21:00:00 | 4. ÖĞÜN ANTRENMANDAN SONRAKİ ÖĞÜN:
+    • Yeşil Biber 1.0adet → 14.0kcal P:0.0g K:3.0g Y:0.0g
+    • Salatalık 1.0adet → 18.0kcal P:0.0g K:4.0g Y:0.0g
+  21:30:00 | SPORDAN SONRA ALINACAKLAR:
+    • Glutamine 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • Omega 3 1000 mg 1.0adet → 0.0kcal P:0.0g K:0.0g Y:0.0g
+  22:30:00 | GECE YATMADAN ÖNCE ALINACAKLAR:
+    • Zma 1.0Servis → 0.0kcal P:0.0g K:0.0g Y:0.0g
+    • D vitamini 1000 iu 1.0adet → 1.0kcal P:0.0g K:0.0g Y:0.0g

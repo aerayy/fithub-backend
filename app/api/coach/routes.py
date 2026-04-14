@@ -1377,28 +1377,32 @@ def generate_nutrition_program(
     gender = onb.get("gender", "bilinmiyor") if onb else "bilinmiyor"
     goal = onb.get("your_goal", "genel sağlık") if onb else "genel sağlık"
 
-    # 3. Get target macros from payload OR auto-calculate from onboarding
+    # 3. Get form inputs from coach
+    meal_count = payload.get("meal_count", 5)
+    diet_type = payload.get("diet_type", "standard")
+    training_days = payload.get("training_days", [])
+    include_supplements = payload.get("include_supplements", True)
+    coach_notes = payload.get("coach_notes", "")
+
+    # 4. Get target macros from payload OR auto-calculate
     target_calories = payload.get("target_calories")
     target_protein = payload.get("target_protein")
     target_carbs = payload.get("target_carbs")
     target_fat = payload.get("target_fat")
 
-    if not all([target_calories, target_protein, target_carbs, target_fat]):
-        # Auto-calculate from onboarding data
-        w = float(weight) if weight != "bilinmiyor" else 70
-        h = float(height) if height != "bilinmiyor" else 170
-        a = int(age) if age != "bilinmiyor" else 25
-        g = str(gender).lower()
-        gl = str(goal).lower()
+    w = float(weight) if weight != "bilinmiyor" else 70
+    h = float(height) if height != "bilinmiyor" else 170
+    a = int(age) if age != "bilinmiyor" else 25
+    g = str(gender).lower()
+    gl = str(goal).lower()
 
-        # Mifflin-St Jeor BMR
+    if not all([target_calories, target_protein, target_carbs, target_fat]):
         if g in ("female", "kadın"):
             bmr = 10 * w + 6.25 * h - 5 * a - 161
         else:
             bmr = 10 * w + 6.25 * h - 5 * a + 5
 
-        # Activity multiplier + goal adjustment
-        tdee = bmr * 1.55  # moderate activity
+        tdee = bmr * 1.55
         if "lose" in gl or "weight" in gl:
             target_calories = int(tdee * 0.8)
         elif "gain" in gl or "muscle" in gl:
@@ -1406,9 +1410,24 @@ def generate_nutrition_program(
         else:
             target_calories = int(tdee)
 
-        target_protein = int(w * 2)
-        target_fat = int(target_calories * 0.25 / 9)
-        target_carbs = int((target_calories - target_protein * 4 - target_fat * 9) / 4)
+        # Adjust macros by diet type
+        if diet_type == "high_protein":
+            target_protein = int(w * 2.5)
+        elif diet_type == "keto":
+            target_protein = int(w * 2)
+        else:
+            target_protein = int(w * 2)
+
+        if diet_type == "keto":
+            target_carbs = int(target_calories * 0.05 / 4)
+            target_fat = int((target_calories - target_protein * 4 - target_carbs * 4) / 9)
+        elif diet_type == "low_carb":
+            target_carbs = int(target_calories * 0.15 / 4)
+            target_fat = int((target_calories - target_protein * 4 - target_carbs * 4) / 9)
+        else:
+            target_fat = int(target_calories * 0.25 / 9)
+            target_carbs = int((target_calories - target_protein * 4 - target_fat * 9) / 4)
+
     client_name = onb.get("client_name", "Danışan") if onb else "Danışan"
 
     # 4. Fetch food database for AI prompt
@@ -1444,65 +1463,114 @@ def generate_nutrition_program(
 
     food_catalog = "\n".join(food_lines)
 
-    # Build prompt
-    prompt = f"""Sen Türkiye'de çalışan profesyonel bir fitness koçusun. Danışanın için haftalık beslenme programı hazırlaman gerekiyor.
+    # Load real coach nutrition examples
+    nutrition_examples = ""
+    try:
+        ex_path = os.path.join(os.path.dirname(__file__), '../../data/nutrition_examples_for_prompt.txt')
+        if os.path.exists(ex_path):
+            with open(ex_path, 'r', encoding='utf-8') as ef:
+                nutrition_examples = ef.read()
+    except Exception:
+        pass
 
-Danışan Bilgileri:
+    # Diet type descriptions
+    diet_descs = {
+        "standard": "Standart dengeli beslenme",
+        "high_protein": "Yüksek proteinli — protein ağırlıklı, her öğünde protein kaynağı olmalı",
+        "low_carb": "Düşük karbonhidrat — pirinç/makarna/ekmek minimumda, sebze ve protein ağırlıklı",
+        "keto": "Ketojenik — karbonhidrat çok düşük (<30g/gün), yağ yüksek, tahıl/meyve/şeker yok",
+        "vegetarian": "Vejetaryen — et/tavuk/balık yok, yumurta ve süt ürünleri kullanılabilir",
+    }
+    diet_desc = diet_descs.get(diet_type, "Standart dengeli beslenme")
+
+    # Training days instruction
+    training_note = ""
+    if training_days:
+        day_names = {"mon": "Pazartesi", "tue": "Salı", "wed": "Çarşamba", "thu": "Perşembe", "fri": "Cuma", "sat": "Cumartesi", "sun": "Pazar"}
+        tr_days = [day_names.get(d, d) for d in training_days]
+        training_note = f"""
+ANTRENMANLı GÜNLER: {', '.join(tr_days)}
+- Antrenman günlerinde: Spordan 1.5-2 saat önce karbonhidrat ağırlıklı öğün, spordan sonra protein ağırlıklı öğün
+- Dinlenme günlerinde: Karbonhidrat %15-20 düşür, yağ biraz artır"""
+
+    # Supplement note
+    supplement_note = ""
+    if include_supplements:
+        supplement_note = """
+SUPPLEMENT ÖNERİLERİ EKLENMELİ:
+- Kahvaltıdan sonra: Multivitamin, C vitamini
+- Spordan 30dk önce: L-Carnitine veya Kafein
+- Spordan sonra: Whey Protein, BCAA veya Glutamine
+- Yatmadan önce: ZMA veya Kazein (opsiyonel)
+Supplement'leri ilgili öğüne ekle, makro değerleri 0 yaz."""
+
+    # Coach notes
+    coach_note = f"\nKOÇUN NOTU: {coach_notes}" if coach_notes else ""
+
+    prompt = f"""Sen Türkiye'de çalışan, binlerce danışana program yazmış profesyonel bir beslenme koçusun.
+
+═══ DANIŞAN PROFİLİ ═══
 - İsim: {client_name}
-- Yaş: {age}
-- Cinsiyet: {gender}
-- Kilo: {weight} kg
-- Boy: {height} cm
+- Yaş: {age} | Cinsiyet: {gender}
+- Kilo: {weight} kg | Boy: {height} cm
 - Hedef: {goal}
+- Diyet tipi: {diet_desc}
 
-Günlük Hedef Makrolar:
+═══ GÜNLÜK HEDEF MAKROLAR ═══
 - Kalori: {target_calories} kcal
 - Protein: {target_protein}g
 - Karbonhidrat: {target_carbs}g
 - Yağ: {target_fat}g
+{training_note}
+{supplement_note}
+{coach_note}
 
-SADECE aşağıdaki besin veritabanından seç. Listede olmayan besini KULLANMA.
-Her besinin makro değerleri verilmiş — bunları kullanarak miktarı (gram veya adet) ayarla ve toplam makroyu hesapla.
+═══ GERÇEK KOÇ BESLENME PROGRAMI ÖRNEKLERİ ═══
+Aşağıda profesyonel bir koçun gerçek danışanlarına yazdığı beslenme programları var.
+BU ÖĞÜN YAPISINI VE ZAMANLAMASINI TAKLİT ET:
+- "KAHVALTIDAN ÖNCE YAPILACAK" (soda+limon+sirke gibi detoks)
+- "1. ÖĞÜN KAHVALTI"
+- "KAHVALTIDAN SONRA ALINACAKLAR" (vitaminler)
+- "2. ÖĞÜN" / "3. ÖĞÜN" (ana öğünler)
+- "SPORDAN 1.5 SAAT ÖNCE" (karbonhidrat ağırlıklı)
+- "SPORDAN SONRA ALINACAKLAR" (protein shake, BCAA)
+- "GECE YATMADAN ÖNCE" (kazein veya hafif atıştırma)
 
-=== BESİN VERİTABANI ===
+{nutrition_examples}
+
+═══ BESİN VERİTABANI ═══
+SADECE bu listeden seç, isim UYDURMA:
+
 {food_catalog}
-=== VERİTABANI SONU ===
 
-JSON formatında 7 günlük program döndür:
+═══ PROGRAM KURALLARI ═══
+1. Her gün {meal_count} öğün — koç örneklerindeki gibi isimlendir
+2. Besin isimleri VERİTABANINDAN BİREBİR KOPYALANMALI
+3. Her günün toplam makroları hedefe %5 sapma ile uysun
+4. Birim "g" olanlarda: gram yaz, makroyu orantıla (100g'da 116kcal → 200g = 232kcal)
+5. Birim "adet/porsiyon" olanlarda: adedi grams alanına yaz
+6. Günler arası çeşitlilik sağla — aynı yemeği her gün koyma
+7. Türk mutfağına uygun, pratik ve hazırlanması kolay yemekler
+8. Saatler gerçekçi olsun (07:00 - 23:00 arası)
+
+═══ ÇIKTI FORMATI ═══
+Sadece JSON döndür:
 {{
   "week": {{
     "mon": {{
       "meals": [
         {{
-          "type": "1. Öğün",
+          "type": "1. ÖĞÜN KAHVALTI",
           "time": "08:00",
           "items": [
-            {{
-              "name_tr": "Yulaf Ezmesi",
-              "grams": 80,
-              "calories": 294,
-              "protein": 8.8,
-              "carbs": 45.6,
-              "fat": 7.2
-            }}
+            {{"name_tr": "Yulaf Ezmesi", "grams": 80, "calories": 294, "protein": 8.8, "carbs": 45.6, "fat": 7.2}}
           ]
         }}
       ]
     }},
-    "tue": {{ ... }}, "wed": {{ ... }}, "thu": {{ ... }}, "fri": {{ ... }}, "sat": {{ ... }}, "sun": {{ ... }}
+    "tue": {{}}, "wed": {{}}, "thu": {{}}, "fri": {{}}, "sat": {{}}, "sun": {{}}
   }}
-}}
-
-Kurallar:
-- Her gün 4-6 öğün, "1. Öğün", "2. Öğün" şeklinde numaralandır
-- Her günün toplam makroları hedefe %5 sapma ile uysun
-- Birim "g" olan besinlerde: istediğin gramı yaz, makroyu orantıla (ör: 100g'da 116kcal ise 200g = 232kcal)
-- Birim "adet/porsiyon/dilim" olanlarda: adet sayısını grams alanına yaz, makroyu çarp
-- Günler arası çeşitlilik sağla
-- time: gerçekçi saatler ("07:30", "10:00", "12:30", "15:30", "19:00")
-- Pratik ve hazırlanması kolay yemekler tercih et
-
-Sadece JSON döndür."""
+}}"""
 
     # 5. Call OpenAI
     from openai import OpenAI as _OpenAI
@@ -1515,7 +1583,7 @@ Sadece JSON döndür."""
         response = ai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Sen Türkiye'de çalışan deneyimli bir fitness ve beslenme koçusun. Danışanlarına Türk mutfağına uygun, pratik ve makro hedeflerine uyan haftalık beslenme programları hazırlıyorsun. Sadece JSON formatında yanıt ver."},
+                {"role": "system", "content": "Sen Türkiye'de 10+ yıl deneyimli, binlerce danışana beslenme programı yazmış profesyonel bir beslenme koçusun. Türk mutfağına uygun, pratik, makro hedeflerine birebir uyan ve gerçek koç kalitesinde haftalık beslenme programları hazırlıyorsun. Öğün zamanlaması, antrenman günü/dinlenme günü ayrımı ve supplement yerleştirme konusunda uzmansın. Sadece JSON formatında yanıt ver."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
