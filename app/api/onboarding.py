@@ -6,6 +6,7 @@ from psycopg2.extras import Json
 from app.core.database import get_db
 from app.schemas.onboarding import OnboardingRequest
 from app.core.security import require_role
+from app.services.badges import check_and_award
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/client", tags=["client"])
@@ -227,10 +228,18 @@ def save_onboarding(
 
     db.commit()
 
+    # Award onboarding badge (fail-safe)
+    newly_earned = []
+    try:
+        newly_earned = check_and_award(user_id, 'onboarding_complete', db)
+    except Exception as e:
+        logger.warning(f"[ONBOARDING] badge award failed: {e}")
+
     return {
         "success": True,
         "onboarding_done": True,
         "updated_rows": updated_rows,
+        "newly_earned": newly_earned,
     }
 
 

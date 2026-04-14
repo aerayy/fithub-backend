@@ -9,6 +9,7 @@ from psycopg2.extras import Json
 
 from app.core.database import get_db
 from app.core.security import require_role
+from app.services.badges import check_and_award
 from .routes import router
 
 logger = logging.getLogger(__name__)
@@ -302,6 +303,14 @@ def send_client_message(
     )
     row = cur.fetchone()
     db.commit()
+
+    # Award message badge (fail-safe)
+    newly_earned = []
+    try:
+        newly_earned = check_and_award(client_user_id, 'message_sent', db)
+    except Exception:
+        pass
+
     return {
         "id": row["id"],
         "sender_type": row["sender_type"],
@@ -311,6 +320,7 @@ def send_client_message(
         "media_metadata": row.get("media_metadata"),
         "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
         "read_at": row["read_at"].isoformat() if row.get("read_at") and hasattr(row["read_at"], "isoformat") else row.get("read_at"),
+        "newly_earned": newly_earned,
     }
 
 

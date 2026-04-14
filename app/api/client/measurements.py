@@ -5,6 +5,7 @@ from typing import Optional
 from psycopg2.extras import RealDictCursor
 from app.core.database import get_db
 from app.core.security import require_role
+from app.services.badges import check_and_award
 from .routes import router
 
 
@@ -46,7 +47,24 @@ def add_measurement(
     )
     row = cur.fetchone()
     db.commit()
-    return {"ok": True, "id": row["id"], "measured_at": str(row["measured_at"])}
+
+    # Award measurement / weighin badges (fail-safe)
+    newly_earned = []
+    try:
+        # Always trigger measurement badge
+        newly_earned += check_and_award(current_user["id"], 'measurement_logged', db)
+        # Also trigger weighin if weight provided
+        if body.weight_kg is not None:
+            newly_earned += check_and_award(current_user["id"], 'weight_logged', db)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "id": row["id"],
+        "measured_at": str(row["measured_at"]),
+        "newly_earned": newly_earned,
+    }
 
 
 @router.get("/measurements")

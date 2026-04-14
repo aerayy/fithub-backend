@@ -5,6 +5,7 @@ from typing import List
 from psycopg2.extras import RealDictCursor
 from app.core.database import get_db
 from app.core.security import require_role
+from app.services.badges import check_and_award
 from .routes import router
 
 
@@ -104,9 +105,17 @@ def finish_workout(
     except Exception:
         pass
 
+    # Award workout badge (fail-safe)
+    newly_earned = []
+    try:
+        newly_earned = check_and_award(uid, 'workout_completed', db)
+    except Exception:
+        pass
+
     return {
         "completed_ids": row["completed_ids"] if row else [],
         "is_finished": row["is_finished"] if row else True,
+        "newly_earned": newly_earned,
     }
 
 

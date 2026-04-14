@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from psycopg2.extras import RealDictCursor
 from app.core.database import get_db
 from app.core.security import require_role
+from app.services.badges import check_and_award
 
 router = APIRouter(prefix="/ai-coach", tags=["ai-coach"])
 
@@ -83,10 +84,17 @@ def purchase_ai_coach(
 
         db.commit()
 
+        # Award AI coach badge (fail-safe)
+        newly_earned = []
+        try:
+            newly_earned = check_and_award(client_user_id, 'ai_coach_purchased', db)
+        except Exception:
+            pass
+
         return {
             "ok": True,
             "subscription_id": sub_id,
-            "message": "AI Kocun aktif! Programlarin hazirlandi.",
+            "message": "AI Koçun aktif! Programların hazırlandı.",
             "profile_summary": {
                 "goal": _goal_label(profile["goal"]),
                 "experience": _exp_label(profile["experience"]),
@@ -98,6 +106,7 @@ def purchase_ai_coach(
             "workout_summary": workout_summary,
             "nutrition_summary": nutrition_summary,
             "cardio_summary": cardio_summary,
+            "newly_earned": newly_earned,
         }
 
     except Exception as e:

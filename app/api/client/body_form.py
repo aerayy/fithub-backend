@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from psycopg2.extras import RealDictCursor
 from app.core.database import get_db
 from app.core.security import require_role
+from app.services.badges import check_and_award
 from .routes import router
 
 
@@ -55,7 +56,14 @@ def save_body_form_photo(
     except Exception:
         pass
 
-    return {"ok": True, "id": photo_id}
+    # Award transformation badge (fail-safe)
+    newly_earned = []
+    try:
+        newly_earned = check_and_award(current_user["id"], 'photo_uploaded', db)
+    except Exception:
+        pass
+
+    return {"ok": True, "id": photo_id, "newly_earned": newly_earned}
 
 
 @router.get("/body-form-photos")

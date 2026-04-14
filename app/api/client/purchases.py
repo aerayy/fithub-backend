@@ -7,6 +7,7 @@ from typing import Optional
 from app.core.security import require_role
 from app.core.database import get_db
 from app.schemas.subscriptions import SubscriptionConfirmRequest, SubscriptionConfirmResponse
+from app.services.badges import check_and_award
 from .routes import router
 import uuid
 
@@ -190,6 +191,13 @@ def checkout(
 
         db.commit()
 
+        # Award coach badge (fail-safe)
+        newly_earned = []
+        try:
+            newly_earned = check_and_award(client_user_id, 'coach_assigned', db)
+        except Exception:
+            pass
+
         return {
             "ok": True,
             "subscription": {
@@ -209,7 +217,8 @@ def checkout(
                 "description": package.get("description"),
                 "duration_days": package["duration_days"],
                 "price": package["price"],
-            }
+            },
+            "newly_earned": newly_earned,
         }
 
     except HTTPException:
