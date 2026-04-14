@@ -702,6 +702,16 @@ def generate_workout_program(
         exercise_names = [e["canonical_name"] for e in filtered]
         exercise_list_str = "\n".join(exercise_names)
 
+        # Load real coach program examples
+        coach_examples = ""
+        try:
+            examples_path = os.path.join(os.path.dirname(__file__), '../../data/coach_examples_for_prompt.txt')
+            if os.path.exists(examples_path):
+                with open(examples_path, 'r', encoding='utf-8') as ef:
+                    coach_examples = ef.read()
+        except Exception:
+            pass
+
         prompt = f"""Sen deneyimli bir fitness koçusun. Aşağıdaki öğrenci profiline göre KİŞİSELLEŞTİRİLMİŞ haftalık antrenman programı oluştur.
 
 ═══ ÖĞRENCİ PROFİLİ ═══
@@ -719,23 +729,37 @@ def generate_workout_program(
 ═══ GÜN TERCİHİ ═══
 {days_instruction}
 
+═══ GERÇEK KOÇ PROGRAM ÖRNEKLERİ ═══
+Aşağıda profesyonel bir koçun gerçek öğrencilerine yazdığı programlar var. BU TARZI TAKLİT ET:
+- Kas grubu eşleştirme mantığını (Göğüs+Arka Kol, Kanat+Sırt+Ön Kol, Omuz+Trapez vb.)
+- Egzersiz sıralamasını (compound önce, izolasyon sonra, core/mekik en son)
+- Set/tekrar aralıklarını (genelde 4×10-15)
+- Birleşik Set (süperset) kullanımını — her günde 2-3 süperset olmalı
+- Her antrenmanın sonunda core/mekik hareketleri
+
+{coach_examples}
+
 ═══ EGZERSİZ VERİTABANI ═══
-Aşağıdaki listeden SEÇ. Kendi egzersiz ismi UYDURMA. Birebir bu isimlerden kullan:
+BİZİM DB'deki egzersiz isimlerinden SEÇ. İsim UYDURMA:
 
 {exercise_list_str}
 
-═══ KURALLAR ═══
-1. Egzersiz isimleri YUKARIDAKI LİSTEDEN BİREBİR KOPYALANMALI
-2. Her gün için antrenmanı mantıklı kas gruplarına böl (Push/Pull/Legs, Upper/Lower, Full Body vb.)
+═══ PROGRAM YAZIM KURALLARI ═══
+1. Egzersiz isimleri YUKARIDAKI VERİTABANI LİSTESİNDEN BİREBİR KOPYALANMALI
+2. Kas grubu eşleştirmesi ÖRNEKLERE UYGUN olmalı:
+   - 6 gün: Göğüs/Arka Kol → Sırt/Ön Kol → Omuz/Trapez → tekrar | Bacak ayrı gün
+   - 5 gün: Göğüs/Arka Kol → Sırt/Ön Kol → Bacak → Omuz → Göğüs/Sırt (varyasyon)
+   - 4 gün: Upper → Lower → Upper → Lower veya Push → Pull → Legs → Omuz
+   - 3 gün: Full Body A → Full Body B → Full Body C veya Push/Pull/Legs
 3. Her antrenman {length_desc} sürmeli
-4. Compound (çok eklemli) hareketler önce, izolasyon hareketleri sonra
-5. Her antrenmanın başında 1 ısınma hareketi (hafif, düşük set)
-6. Notes alanına: RPE (zorluk), tempo, veya teknik ipucu yaz
-7. Popüler, temel hareketleri tercih et (Bench Press, Squat, Deadlift, Row, Pulldown vb.)
-8. Garip, nadir hareketler KULLANMA — her spor salonunda yapılabilecek hareketler seç
+4. Sıralama: Compound → İzolasyon → Core/Mekik
+5. Her günde 2-3 Birleşik Set (süperset) kullan — notes alanına "Birleşik Set" yaz
+6. Set aralıkları: Compound 4-5×8-12, İzolasyon 3-4×12-15, Core 3-4×15-20
+7. Notes alanına: RPE, tempo, teknik ipucu, veya "Birleşik Set" yaz
+8. Popüler, temel hareketleri tercih et — garip/nadir hareketler KULLANMA
 
 ═══ ÇIKTI FORMATI ═══
-Sadece JSON döndür, başka hiçbir şey yazma:
+Sadece JSON döndür:
 {{
   "mon": [{{"name": "Exact Exercise Name", "sets": 3, "reps": "8-10", "notes": "RPE 7"}}],
   "tue": [],
@@ -750,7 +774,7 @@ Sadece JSON döndür, başka hiçbir şey yazma:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Sen profesyonel bir fitness koçusun. Öğrencinin profiline, deneyimine ve tercihlerine göre kişiselleştirilmiş, güvenli ve etkili antrenman programları oluşturursun. Sadece JSON formatında yanıt ver."},
+                {"role": "system", "content": "Sen 10+ yıl deneyimli profesyonel bir fitness koçusun. Binlerce öğrenciye program yazmışsın. Öğrencinin profiline ve tercihlerine göre kişiselleştirilmiş, gerçek bir koçun yazacağı kalitede antrenman programları oluşturursun. Süperset kullanımı, doğru kas grubu eşleştirmesi ve egzersiz sıralaması konusunda uzmansın. Sadece JSON formatında yanıt ver."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
