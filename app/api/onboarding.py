@@ -60,6 +60,13 @@ def save_onboarding(
             preferred_workout_hours,
             nutrition_budget,
             target_weight_kg,
+            health_problems,
+            health_problems_other,
+            food_allergies,
+            food_allergies_other,
+            supplements,
+            wakeup_time,
+            sleep_time,
             created_at,
             updated_at
         )
@@ -89,6 +96,13 @@ def save_onboarding(
             %(preferred_workout_hours)s,
             %(nutrition_budget)s,
             %(target_weight_kg)s,
+            %(health_problems)s,
+            %(health_problems_other)s,
+            %(food_allergies)s,
+            %(food_allergies_other)s,
+            %(supplements)s,
+            %(wakeup_time)s,
+            %(sleep_time)s,
             NOW(),
             NOW()
         )
@@ -117,6 +131,13 @@ def save_onboarding(
             preferred_workout_hours = EXCLUDED.preferred_workout_hours,
             nutrition_budget    = EXCLUDED.nutrition_budget,
             target_weight_kg   = EXCLUDED.target_weight_kg,
+            health_problems     = EXCLUDED.health_problems,
+            health_problems_other = EXCLUDED.health_problems_other,
+            food_allergies      = EXCLUDED.food_allergies,
+            food_allergies_other = EXCLUDED.food_allergies_other,
+            supplements         = EXCLUDED.supplements,
+            wakeup_time         = EXCLUDED.wakeup_time,
+            sleep_time          = EXCLUDED.sleep_time,
             updated_at          = NOW();
         """,
         {
@@ -145,6 +166,13 @@ def save_onboarding(
             "preferred_workout_hours": req.preferred_workout_hours,
             "nutrition_budget": req.nutrition_budget,
             "target_weight_kg": req.target_weight_kg,
+            "health_problems": req.health_problems or [],
+            "health_problems_other": req.health_problems_other or "",
+            "food_allergies": req.food_allergies or [],
+            "food_allergies_other": req.food_allergies_other or "",
+            "supplements": req.supplements or [],
+            "wakeup_time": req.wakeup_time or "",
+            "sleep_time": req.sleep_time or "",
         },
     )
 
@@ -216,7 +244,9 @@ def get_onboarding(user_id: int, db=Depends(get_db), current_user=Depends(requir
             your_goal, body_type, experience, how_fit, knee_pain, pushups,
             stressed, commit, pref_workout_length, how_motivated, plan_reference,
             body_part_focus, bad_habit, what_motivate, workout_place,
-            preferred_workout_days, preferred_workout_hours, nutrition_budget, target_weight_kg
+            preferred_workout_days, preferred_workout_hours, nutrition_budget, target_weight_kg,
+            health_problems, health_problems_other, food_allergies, food_allergies_other,
+            supplements, wakeup_time, sleep_time
         FROM client_onboarding
         WHERE user_id = %s
         """,

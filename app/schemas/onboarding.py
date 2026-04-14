@@ -32,3 +32,12 @@ class OnboardingRequest(BaseModel):
     preferred_workout_hours: Optional[str] = None
     nutrition_budget: Optional[str] = None
     target_weight_kg: Optional[float] = None
+
+    # New fields
+    health_problems: Optional[List[str]] = None
+    health_problems_other: Optional[str] = None
+    food_allergies: Optional[List[str]] = None
+    food_allergies_other: Optional[str] = None
+    supplements: Optional[List[str]] = None
+    wakeup_time: Optional[str] = None
+    sleep_time: Optional[str] = None
