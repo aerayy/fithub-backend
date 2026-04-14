@@ -108,6 +108,7 @@ def get_student_detail(
           u.timezone,
           u.created_at,
           u.updated_at,
+          u.birthdate,
           c.gender,
           c.date_of_birth,
           c.height_cm,
