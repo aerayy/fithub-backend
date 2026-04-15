@@ -57,6 +57,8 @@ def check_and_award(user_id: int, trigger: str, db=None):
         elif trigger == 'meal_photo_sent':
             if _award(cur, user_id, 'first_meal_photo'):
                 newly_earned.append('first_meal_photo')
+            # Also check if today's meal photos cover the day (>= 3 = full day)
+            _check_all_meals_today(cur, user_id, newly_earned)
 
         elif trigger == 'all_meals_logged':
             if _award(cur, user_id, 'all_meals_logged'):
@@ -105,12 +107,87 @@ def _award(cur, user_id, badge_id):
 
 
 def _check_streak_badges(cur, user_id, newly_earned):
-    """Check workout streak and award streak badges."""
-    # Simple: count consecutive days with completed workouts (mock for now)
-    # In production, query workout completion logs
-    cur.execute("SELECT COUNT(*) FROM user_badges WHERE user_id = %s AND badge_id = 'first_workout'", (user_id,))
-    # For now, we don't have a workout_logs table, so skip streak calculation
-    pass
+    """
+    Award streak badges based on consecutive days with finished workouts.
+
+    Rules (Duolingo-style):
+    - Only counts days where workout_sessions.is_finished = TRUE
+    - Streak resets if the latest finished day is older than yesterday
+    - Distinct dates only (multiple finishes on same day = 1)
+
+    Thresholds: 7 → streak_7, 30 → streak_30, 100 → streak_100
+    """
+    from datetime import datetime, timedelta, date
+
+    cur.execute(
+        """
+        SELECT DISTINCT session_date
+        FROM workout_sessions
+        WHERE user_id = %s AND is_finished = TRUE
+        ORDER BY session_date DESC
+        LIMIT 200
+        """,
+        (user_id,),
+    )
+    rows = cur.fetchall() or []
+    dates = []
+    for r in rows:
+        d = r[0] if not isinstance(r, dict) else r.get("session_date")
+        if d is None:
+            continue
+        if isinstance(d, datetime):
+            d = d.date()
+        dates.append(d)
+
+    if not dates:
+        return
+
+    today = datetime.utcnow().date()
+    yesterday = today - timedelta(days=1)
+
+    # Streak counts only if latest finish was today or yesterday
+    if dates[0] != today and dates[0] != yesterday:
+        return
+
+    streak = 0
+    expected = dates[0]
+    for d in dates:
+        if d == expected:
+            streak += 1
+            expected = expected - timedelta(days=1)
+        else:
+            break
+
+    if streak >= 7 and _award(cur, user_id, 'streak_7'):
+        newly_earned.append('streak_7')
+    if streak >= 30 and _award(cur, user_id, 'streak_30'):
+        newly_earned.append('streak_30')
+    if streak >= 100 and _award(cur, user_id, 'streak_100'):
+        newly_earned.append('streak_100')
+
+
+def _check_all_meals_today(cur, user_id, newly_earned):
+    """
+    Award 'all_meals_logged' if the user logged at least 3 distinct meals today.
+    MVP threshold: 3 (breakfast/lunch/dinner standard). Counts distinct meal_label.
+    """
+    try:
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT meal_label)
+            FROM meal_photos
+            WHERE client_user_id = %s
+              AND created_at::date = CURRENT_DATE
+            """,
+            (user_id,),
+        )
+        row = cur.fetchone()
+        count = (row[0] if not isinstance(row, dict) else row.get("count")) or 0
+        if count >= 3 and _award(cur, user_id, 'all_meals_logged'):
+            newly_earned.append('all_meals_logged')
+    except Exception:
+        # meal_photos table or column missing — silent skip
+        pass
 
 
 def _check_membership_badges(cur, user_id, newly_earned):
