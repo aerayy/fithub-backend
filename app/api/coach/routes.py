@@ -2814,8 +2814,12 @@ def delete_cardio_program(
     return {"message": "Kardiyo programı silindi"}
 
 
-# ── Import meal_photos to register its routes on this router ──
+# ── Import sub-modules to register their routes on this router ──
 try:
     from . import meal_photos  # noqa: F401
+except Exception:
+    pass
+try:
+    from . import drafts  # noqa: F401
 except Exception:
     pass
