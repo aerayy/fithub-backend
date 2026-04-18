@@ -111,34 +111,7 @@ def signup(req: SignUpRequest, db=Depends(get_db)):
 
 
 
-@router.post("/login")
-def login(req: LoginRequest, db=Depends(get_db)):
-    cur = db.cursor()
-    cur.execute(
-        """
-        SELECT id, email, full_name, password_hash
-        FROM users
-        WHERE email = %s
-        """,
-        (req.email,),
-    )
-    user = cur.fetchone()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    if not bcrypt.checkpw(req.password.encode(), user["password_hash"].encode()):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    token = create_token(user["id"])
-    return {
-        "token": token,
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-            "full_name": user.get("full_name"),
-            "role": user.get("role"),
-        },
-    }
+# /login endpoint moved to auth_v2.py (single source, supports email + phone + remember_me)
 
 
 @router.post("/google")
