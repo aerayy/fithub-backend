@@ -226,7 +226,7 @@ def get_active_workout_for_client(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
 @router.get("/cardio/active")
@@ -286,4 +286,4 @@ def get_active_cardio_for_client(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")

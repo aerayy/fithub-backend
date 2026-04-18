@@ -229,7 +229,7 @@ def checkout(
         print(f"checkout: ERROR user={client_user_id} package={coach_package_id} error={str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            detail="Bir hata oluştu. Lütfen tekrar deneyin."
         )
 
 
@@ -414,12 +414,12 @@ def confirm_subscription(
         
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create subscription: {str(e)}"
+            detail="Bir hata oluştu. Lütfen tekrar deneyin."
         )
     except Exception as e:
         db.rollback()
         print(f"subscription_confirm: ERROR user={client_user_id} coach={coach_id} plan={plan_id} ref={subscription_ref} error={str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            detail="Bir hata oluştu. Lütfen tekrar deneyin."
         )

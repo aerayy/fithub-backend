@@ -328,7 +328,7 @@ def create_coach(
         # Other integrity errors
         raise HTTPException(
             status_code=400,
-            detail=f"Database constraint violation: {str(e)}"
+            detail="Bir hata oluştu. Lütfen tekrar deneyin."
         )
     except HTTPException:
         # Re-raise HTTP exceptions after rollback
@@ -339,7 +339,7 @@ def create_coach(
         db.rollback()
         raise HTTPException(
             status_code=400,
-            detail=f"Failed to create coach: {str(e)}"
+            detail="Bir hata oluştu. Lütfen tekrar deneyin."
         )
     finally:
         # Restore original autocommit setting

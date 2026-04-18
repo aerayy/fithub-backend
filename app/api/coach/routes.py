@@ -209,16 +209,16 @@ def get_active_programs(
     if not cur.fetchone():
         raise HTTPException(status_code=403, detail="Student not assigned to this coach")
 
-    # workout program
+    # workout program (filtered by coach ownership)
     cur.execute(
         """
         SELECT id, client_user_id, title, is_active, created_at, updated_at
         FROM workout_programs
-        WHERE client_user_id=%s AND is_active=TRUE
+        WHERE client_user_id=%s AND coach_user_id=%s AND is_active=TRUE
         ORDER BY id DESC
         LIMIT 1
         """,
-        (student_user_id,),
+        (student_user_id, coach_id),
     )
     workout_program = cur.fetchone()
 
@@ -253,16 +253,16 @@ def get_active_programs(
         )
         workout_exercises = cur.fetchall()
 
-    # nutrition program
+    # nutrition program (filtered by coach ownership)
     cur.execute(
         """
         SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at
         FROM nutrition_programs
-        WHERE client_user_id=%s AND is_active=TRUE
+        WHERE client_user_id=%s AND coach_user_id=%s AND is_active=TRUE
         ORDER BY id DESC
         LIMIT 1
         """,
-        (student_user_id,),
+        (student_user_id, coach_id),
     )
     nutrition_program = cur.fetchone()
 
@@ -480,7 +480,7 @@ def save_workout_program(
 
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error saving workout program: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
 def _normalize_reps(reps_value):
@@ -968,7 +968,7 @@ Sadece JSON döndür:
 
     except json.JSONDecodeError as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Invalid AI response format: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
     except ImportError:
         db.rollback()
         raise HTTPException(status_code=500, detail="OpenAI library not installed. Please install openai package.")
@@ -976,7 +976,7 @@ Sadece JSON döndür:
         db.rollback()
         logger = logging.getLogger(__name__)
         logger.error(f"Error generating workout program for student_id={student_user_id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error generating workout program: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
 @router.get("/students/{student_user_id}/workout-programs/latest")
@@ -1192,7 +1192,7 @@ def assign_latest_workout_program(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error assigning workout program: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
 @router.post("/students/{student_user_id}/workout-programs/{program_id}/assign")
@@ -1285,7 +1285,7 @@ def assign_workout_program(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error assigning workout program: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
 # --------------------------------------------------
@@ -1678,7 +1678,7 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
                         item.setdefault("fat", 0)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI beslenme programı oluşturulamadı: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
     if not week_data:
         raise HTTPException(status_code=500, detail="AI boş bir program döndürdü")
@@ -1732,7 +1732,7 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Program kaydedilemedi: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
     # 7. Build response — week with per-day meals
     response_week = {}
@@ -2652,7 +2652,7 @@ def save_cardio_program(
 
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error saving cardio program: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
 @router.get("/students/{student_user_id}/cardio-programs/latest")
@@ -2778,7 +2778,7 @@ def assign_latest_cardio_program(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error assigning cardio program: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
 @router.delete("/students/{student_user_id}/cardio-programs/{program_id}")

@@ -248,5 +248,5 @@ def get_daily_targets(
         logger.error(f"Error getting daily targets for user_id={client_user_id}: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get daily targets: {str(e)}"
+            detail="Bir hata oluştu. Lütfen tekrar deneyin."
         )

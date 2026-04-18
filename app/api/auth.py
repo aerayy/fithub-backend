@@ -98,13 +98,13 @@ def signup(req: SignUpRequest, db=Depends(get_db)):
         db.rollback()
         print(f"[SIGNUP] Database error: {type(e).__name__}: {e}")
         print(f"[SIGNUP] Rolled back transaction due to database error")
-        raise HTTPException(status_code=500, detail=f"Database error during signup: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
     except Exception as e:
         # Any other unexpected errors
         db.rollback()
         print(f"[SIGNUP] Unexpected error: {type(e).__name__}: {e}")
         print(f"[SIGNUP] Rolled back transaction due to unexpected error")
-        raise HTTPException(status_code=500, detail=f"Unexpected error during signup: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
     finally:
         # Restore original autocommit setting
         db.autocommit = original_autocommit
@@ -130,7 +130,15 @@ def login(req: LoginRequest, db=Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     token = create_token(user["id"])
-    return {"token": token, "user_id": user["id"], "user_email": user["email"]}
+    return {
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user.get("full_name"),
+            "role": user.get("role"),
+        },
+    }
 
 
 @router.post("/google")

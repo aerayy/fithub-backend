@@ -131,4 +131,4 @@ def get_client_state(
             f"Error getting client state for user_id={client_user_id}: {type(e).__name__}: {e}",
             exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=f"Failed to get client state: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")

@@ -144,8 +144,8 @@ Rules:
 
     except json.JSONDecodeError as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Invalid AI response: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
     except Exception as e:
         db.rollback()
         logger.error(f"Error generating challenge for user_id={user_id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error generating challenge: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")

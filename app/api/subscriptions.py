@@ -288,6 +288,15 @@ def confirm_subscription(
                 created=False
             )
         
+        # Cancel any existing active subscription to a DIFFERENT coach (prevent dual-coaching)
+        cur.execute(
+            """
+            UPDATE subscriptions SET status = 'canceled', updated_at = NOW()
+            WHERE client_user_id = %s AND status = 'active' AND coach_user_id != %s
+            """,
+            (client_user_id, actual_coach_user_id),
+        )
+
         # Build INSERT query dynamically based on available columns
         columns = ["client_user_id", "coach_user_id", "package_id", "plan_name", "status", "purchased_at", "started_at", "ends_at", "created_at", "updated_at"]
         values = [client_user_id, actual_coach_user_id, package_id, plan_name, "active", now, started_at, ends_at, now, now]
@@ -418,7 +427,7 @@ def confirm_subscription(
         print(f"[SUBSCRIPTION_CONFIRM] ERROR IntegrityError: client={client_user_id} coach={coach_id} plan={plan_id} ref={subscription_ref} error={str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create subscription: {str(e)}"
+            detail="Bir hata oluştu. Lütfen tekrar deneyin."
         )
     except HTTPException:
         # Re-raise HTTP exceptions (they already have proper status codes)
@@ -434,5 +443,5 @@ def confirm_subscription(
         print(f"[SUBSCRIPTION_CONFIRM] TRACEBACK:\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
+            detail="Bir hata oluştu. Lütfen tekrar deneyin."
         )

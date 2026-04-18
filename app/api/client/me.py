@@ -114,6 +114,7 @@ def client_me(
             "role": row["role"],
             "full_name": row.get("full_name"),
             "phone_number": row.get("phone_number"),
+            "phone": row.get("phone_number"),
             "profile_photo_url": row.get("profile_photo_url"),
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
         },

@@ -111,7 +111,7 @@ def purchase_ai_coach(
 
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"AI Coach purchase error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
 # ─── Workout Generation ───
