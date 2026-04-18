@@ -66,6 +66,7 @@ def client_me(
             COALESCE(u.full_name, co.full_name) AS full_name,
             u.phone_number,
             u.profile_photo_url,
+            u.created_at,
             c.onboarding_done,
             c.gender,
             c.goal_type,
@@ -114,6 +115,7 @@ def client_me(
             "full_name": row.get("full_name"),
             "phone_number": row.get("phone_number"),
             "profile_photo_url": row.get("profile_photo_url"),
+            "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
         },
         "client": client,
     }
