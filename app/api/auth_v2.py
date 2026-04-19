@@ -61,7 +61,8 @@ class VerifyOTPRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    identifier: str  # email or phone
+    identifier: str = ""  # email or phone
+    email: str = ""  # Flutter compatibility (sends "email" instead of "identifier")
     password: str
     remember_me: bool = False
 
@@ -283,7 +284,8 @@ def resend_otp(body: VerifyOTPRequest, db=Depends(get_db)):
 def login(body: LoginRequest, db=Depends(get_db)):
     """Login with email or phone + password."""
     cur = db.cursor(cursor_factory=RealDictCursor)
-    identifier = body.identifier.strip()
+    # Flutter sends "email" field, web/admin may send "identifier"
+    identifier = (body.identifier or body.email or "").strip()
 
     # Detect email vs phone
     if '@' in identifier:
