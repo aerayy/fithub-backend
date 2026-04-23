@@ -302,7 +302,7 @@ def login(body: LoginRequest, db=Depends(get_db)):
         raise HTTPException(401, "E-posta veya şifre hatalı")
 
     # Generate token
-    expiry_days = 7 if body.remember_me else 1
+    expiry_days = 30 if body.remember_me else 1
     token = create_token(user["id"], expiry_days=expiry_days)
 
     # Store remember token if requested
@@ -311,7 +311,7 @@ def login(body: LoginRequest, db=Depends(get_db)):
         remember_hash = hashlib.sha256(remember.encode()).hexdigest()
         cur.execute(
             "UPDATE users SET remember_token = %s, remember_token_expires_at = %s WHERE id = %s",
-            (remember_hash, datetime.utcnow() + timedelta(days=7), user["id"]),
+            (remember_hash, datetime.utcnow() + timedelta(days=30), user["id"]),
         )
         db.commit()
 
