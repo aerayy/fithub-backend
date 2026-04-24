@@ -252,13 +252,15 @@ ON CONFLICT (user_id) DO UPDATE SET
   supplements = EXCLUDED.supplements, wakeup_time = EXCLUDED.wakeup_time, sleep_time = EXCLUDED.sleep_time;
 
 -- Subscription (Kaan'ın 3 Aylık Güç Programı)
-INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status, started_at, ends_at, program_state, program_assigned_at, created_at)
+INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status, started_at, ends_at, program_state, program_assigned_at, created_at, purchased_at, subscription_ref)
 SELECT student.id, coach.id,
   '3 Aylık Güç Programı', 'active',
   NOW() - INTERVAL '45 days',
   NOW() + INTERVAL '45 days',
   'assigned', NOW() - INTERVAL '44 days',
-  NOW() - INTERVAL '45 days'
+  NOW() - INTERVAL '45 days',
+  NOW() - INTERVAL '45 days',
+  'demo_sub_deniz_kaan_01'
 FROM users student, users coach
 WHERE student.email = 'deniz.korkmaz@fithub.demo'
   AND coach.email = 'kaan.yildiz@fithub.demo'
@@ -353,13 +355,15 @@ ON CONFLICT (user_id) DO UPDATE SET
   supplements = EXCLUDED.supplements, wakeup_time = EXCLUDED.wakeup_time, sleep_time = EXCLUDED.sleep_time;
 
 -- Subscription (Elif'in 6 Aylık Premium)
-INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status, started_at, ends_at, program_state, program_assigned_at, created_at)
+INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status, started_at, ends_at, program_state, program_assigned_at, created_at, purchased_at, subscription_ref)
 SELECT student.id, coach.id,
   '6 Aylık Premium', 'active',
   NOW() - INTERVAL '75 days',
   NOW() + INTERVAL '105 days',
   'assigned', NOW() - INTERVAL '74 days',
-  NOW() - INTERVAL '75 days'
+  NOW() - INTERVAL '75 days',
+  NOW() - INTERVAL '75 days',
+  'demo_sub_buse_elif_01'
 FROM users student, users coach
 WHERE student.email = 'buse.celik@fithub.demo'
   AND coach.email = 'elif.demir@fithub.demo'
