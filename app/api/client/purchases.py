@@ -61,30 +61,25 @@ def checkout(
         duration_days = package["duration_days"]
         price = package["price"]
 
-        # Check for existing active subscription
+        # Policy: Aktif sub varsa yeni alım REJECT — kullanıcı önce cancel etmeli.
+        # uq_sub_one_active_per_client unique index bunu DB seviyesinde garantiler,
+        # ama burada önce kontrol edip anlamlı bir hata dönüyoruz.
         cur.execute(
             """
-            SELECT id, coach_user_id, status, ends_at
+            SELECT id, coach_user_id, plan_name, ends_at
             FROM subscriptions
             WHERE client_user_id = %s
               AND status = 'active'
               AND (ends_at IS NULL OR ends_at > NOW())
-            ORDER BY created_at DESC
             LIMIT 1
             """,
             (client_user_id,)
         )
         existing_sub = cur.fetchone()
-
-        # Policy: Cancel any existing active subscription (same or different coach)
         if existing_sub:
-            cur.execute(
-                """
-                UPDATE subscriptions
-                SET status = 'canceled', updated_at = NOW()
-                WHERE id = %s
-                """,
-                (existing_sub["id"],)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Aktif aboneliğin var. Yeni paket almak için önce mevcut aboneliğini iptal etmelisin."
             )
 
         # Calculate dates

@@ -256,7 +256,7 @@ def confirm_subscription(
         else:
             print(f"[SUBSCRIPTION_CONFIRM] No duration_days, ends_at will be NULL")
         
-        # Check idempotency: existing active subscription for same client + package
+        # Idempotency: aynı client + package için zaten aktif sub varsa onu dön
         cur.execute(
             """
             SELECT id, client_user_id, coach_user_id, package_id, plan_name, status, started_at, ends_at, purchased_at
@@ -268,7 +268,7 @@ def confirm_subscription(
             (client_user_id, package_id)
         )
         existing_active_subscription = cur.fetchone()
-        
+
         if existing_active_subscription:
             print(f"[SUBSCRIPTION_CONFIRM] IDEMPOTENCY: Found existing active subscription id={existing_active_subscription['id']} for client={client_user_id} package={package_id}")
             return SubscriptionConfirmResponse(
@@ -287,15 +287,24 @@ def confirm_subscription(
                 },
                 created=False
             )
-        
-        # Cancel any existing active subscription to a DIFFERENT coach (prevent dual-coaching)
+
+        # Policy: Herhangi bir aktif sub varsa reject — kullanıcı önce cancel etmeli
+        # (farklı paket, farklı koç fark etmez). uq_sub_one_active_per_client DB'de garantiler.
         cur.execute(
             """
-            UPDATE subscriptions SET status = 'canceled', updated_at = NOW()
-            WHERE client_user_id = %s AND status = 'active' AND coach_user_id != %s
+            SELECT id FROM subscriptions
+            WHERE client_user_id = %s AND status = 'active'
+            LIMIT 1
             """,
-            (client_user_id, actual_coach_user_id),
+            (client_user_id,),
         )
+        any_active = cur.fetchone()
+        if any_active:
+            print(f"[SUBSCRIPTION_CONFIRM] REJECTED: client={client_user_id} already has active sub id={any_active['id']}")
+            raise HTTPException(
+                status_code=409,
+                detail="Aktif aboneliğin var. Yeni paket almak için önce mevcut aboneliğini iptal etmelisin."
+            )
 
         # Build INSERT query dynamically based on available columns
         columns = ["client_user_id", "coach_user_id", "package_id", "plan_name", "status", "purchased_at", "started_at", "ends_at", "created_at", "updated_at"]

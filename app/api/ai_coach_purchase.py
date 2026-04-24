@@ -23,13 +23,29 @@ def purchase_ai_coach(
     cur = db.cursor(cursor_factory=RealDictCursor)
 
     try:
-        # Check existing
+        # Idempotent: AI Koç zaten aktifse OK dön
         cur.execute(
             "SELECT id FROM subscriptions WHERE client_user_id = %s AND coach_user_id = %s AND status = 'active'",
             (client_user_id, AI_COACH_USER_ID),
         )
         if cur.fetchone():
             return {"ok": True, "message": "AI Koc zaten aktif", "already_active": True}
+
+        # Exclusivity: Regular koçtan aktif sub varsa reject — "one coach at a time".
+        # Kullanıcı önce regular sub'ı cancel etsin, sonra AI alabilir.
+        cur.execute(
+            """
+            SELECT id, coach_user_id FROM subscriptions
+            WHERE client_user_id = %s AND status = 'active' AND coach_user_id != %s
+            LIMIT 1
+            """,
+            (client_user_id, AI_COACH_USER_ID),
+        )
+        if cur.fetchone():
+            raise HTTPException(
+                status_code=409,
+                detail="Zaten bir koçla aktif aboneliğin var. AI Koç için önce mevcut aboneliğini iptal etmelisin."
+            )
 
         # Get full onboarding data
         cur.execute("SELECT * FROM client_onboarding WHERE user_id = %s", (client_user_id,))
@@ -109,6 +125,9 @@ def purchase_ai_coach(
             "newly_earned": newly_earned,
         }
 
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")

@@ -344,3 +344,35 @@ def create_coach(
     finally:
         # Restore original autocommit setting
         db.autocommit = original_autocommit
+
+
+@router.post("/maintenance/expire-subscriptions")
+def expire_stale_subscriptions(
+    db=Depends(get_db),
+    _admin_key=Depends(verify_admin_key),
+):
+    """
+    Süresi geçmiş (ends_at < NOW) ama hâlâ status='active' olan abonelikleri
+    status='expired' yapar. Saatlik cron ile çağrılmak üzere tasarlandı
+    (Render Cron Job veya CI scheduled task).
+
+    Requires X-Admin-Key header.
+    """
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """
+        UPDATE subscriptions
+        SET status = 'expired', updated_at = NOW()
+        WHERE status = 'active'
+          AND ends_at IS NOT NULL
+          AND ends_at < NOW()
+        RETURNING id
+        """
+    )
+    expired_rows = cur.fetchall()
+    db.commit()
+    return {
+        "ok": True,
+        "expired_count": len(expired_rows),
+        "expired_ids": [r["id"] for r in expired_rows],
+    }
