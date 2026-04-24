@@ -231,15 +231,25 @@ ON CONFLICT (user_id) DO UPDATE SET
 INSERT INTO client_onboarding (user_id, full_name, age, weight_kg, height_cm, gender, your_goal, body_type, experience, how_fit, knee_pain, pushups, commit, pref_workout_length, body_part_focus, workout_place, preferred_workout_days, nutrition_budget, target_weight_kg, health_problems, food_allergies, supplements, wakeup_time, sleep_time)
 SELECT u.id,
   'Deniz Korkmaz', 27, 85.5, 182, 'Male', 'gain_muscle', 'mesomorph', 'intermediate', 'moderately_fit', 'no', '20_plus', 'least_6_months', 'medium',
-  ARRAY['Göğüs', 'Sırt', 'Omuz'],
-  ARRAY['gym'],
-  ARRAY['mon', 'tue', 'wed', 'thu', 'fri'],
+  '["Göğüs", "Sırt", "Omuz"]'::jsonb,
+  '["gym"]'::jsonb,
+  '["mon", "tue", "wed", "thu", "fri"]'::jsonb,
   'medium', 90.0,
   ARRAY[]::text[], ARRAY[]::text[],
   ARRAY['Whey Protein', 'Kreatin', 'BCAA'],
   '07:00', '23:00'
 FROM users u WHERE u.email = 'deniz.korkmaz@fithub.demo'
-ON CONFLICT (user_id) DO NOTHING;
+ON CONFLICT (user_id) DO UPDATE SET
+  full_name = EXCLUDED.full_name,
+  age = EXCLUDED.age, weight_kg = EXCLUDED.weight_kg, height_cm = EXCLUDED.height_cm,
+  gender = EXCLUDED.gender, your_goal = EXCLUDED.your_goal, body_type = EXCLUDED.body_type,
+  experience = EXCLUDED.experience, how_fit = EXCLUDED.how_fit, knee_pain = EXCLUDED.knee_pain,
+  pushups = EXCLUDED.pushups, commit = EXCLUDED.commit, pref_workout_length = EXCLUDED.pref_workout_length,
+  body_part_focus = EXCLUDED.body_part_focus, workout_place = EXCLUDED.workout_place,
+  preferred_workout_days = EXCLUDED.preferred_workout_days,
+  nutrition_budget = EXCLUDED.nutrition_budget, target_weight_kg = EXCLUDED.target_weight_kg,
+  health_problems = EXCLUDED.health_problems, food_allergies = EXCLUDED.food_allergies,
+  supplements = EXCLUDED.supplements, wakeup_time = EXCLUDED.wakeup_time, sleep_time = EXCLUDED.sleep_time;
 
 -- Subscription (Kaan'ın 3 Aylık Güç Programı)
 INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status, started_at, ends_at, program_state, program_assigned_at, created_at)
@@ -321,16 +331,26 @@ ON CONFLICT (user_id) DO UPDATE SET
 INSERT INTO client_onboarding (user_id, full_name, age, weight_kg, height_cm, gender, your_goal, body_type, experience, how_fit, knee_pain, pushups, commit, pref_workout_length, body_part_focus, workout_place, preferred_workout_days, nutrition_budget, target_weight_kg, health_problems, food_allergies, supplements, wakeup_time, sleep_time)
 SELECT u.id,
   'Buse Çelik', 24, 68.0, 165, 'Female', 'lose_weight', 'endomorph', 'beginner', 'not_fit', 'no', 'zero_to_5', 'least_3_months', 'short',
-  ARRAY['Bacak', 'Kalça', 'Karın'],
-  ARRAY['gym', 'home'],
-  ARRAY['mon', 'wed', 'fri', 'sat'],
+  '["Bacak", "Kalça", "Karın"]'::jsonb,
+  '["gym", "home"]'::jsonb,
+  '["mon", "wed", "fri", "sat"]'::jsonb,
   'low', 58.0,
   ARRAY[]::text[],
   ARRAY['Laktoz']::text[],
   ARRAY['Multivitamin']::text[],
   '06:30', '22:30'
 FROM users u WHERE u.email = 'buse.celik@fithub.demo'
-ON CONFLICT (user_id) DO NOTHING;
+ON CONFLICT (user_id) DO UPDATE SET
+  full_name = EXCLUDED.full_name,
+  age = EXCLUDED.age, weight_kg = EXCLUDED.weight_kg, height_cm = EXCLUDED.height_cm,
+  gender = EXCLUDED.gender, your_goal = EXCLUDED.your_goal, body_type = EXCLUDED.body_type,
+  experience = EXCLUDED.experience, how_fit = EXCLUDED.how_fit, knee_pain = EXCLUDED.knee_pain,
+  pushups = EXCLUDED.pushups, commit = EXCLUDED.commit, pref_workout_length = EXCLUDED.pref_workout_length,
+  body_part_focus = EXCLUDED.body_part_focus, workout_place = EXCLUDED.workout_place,
+  preferred_workout_days = EXCLUDED.preferred_workout_days,
+  nutrition_budget = EXCLUDED.nutrition_budget, target_weight_kg = EXCLUDED.target_weight_kg,
+  health_problems = EXCLUDED.health_problems, food_allergies = EXCLUDED.food_allergies,
+  supplements = EXCLUDED.supplements, wakeup_time = EXCLUDED.wakeup_time, sleep_time = EXCLUDED.sleep_time;
 
 -- Subscription (Elif'in 6 Aylık Premium)
 INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status, started_at, ends_at, program_state, program_assigned_at, created_at)
