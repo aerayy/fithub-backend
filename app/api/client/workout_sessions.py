@@ -24,11 +24,15 @@ def toggle_exercise(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
-    """Toggle an exercise done/undone for today. Returns updated list."""
+    """
+    Mark an exercise as completed for today (idempotent — undo etmez).
+    Endpoint adı legacy 'toggle' ama davranış mark-only:
+    aynı exercise_id için tekrar çağrı no-op.
+    """
     uid = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
 
-    # Upsert session row
+    # Upsert: idempotent — array_append SADECE exercise_id zaten yoksa
     cur.execute(
         """INSERT INTO workout_sessions (user_id, session_date, day_key, completed_ids)
            VALUES (%s, CURRENT_DATE, %s, ARRAY[%s]::text[])
@@ -36,13 +40,13 @@ def toggle_exercise(
            DO UPDATE SET
              completed_ids = CASE
                WHEN %s = ANY(workout_sessions.completed_ids)
-               THEN array_remove(workout_sessions.completed_ids, %s)
+               THEN workout_sessions.completed_ids
                ELSE array_append(workout_sessions.completed_ids, %s)
              END,
              updated_at = NOW()
            RETURNING completed_ids, is_finished""",
         (uid, body.day_key, body.exercise_id,
-         body.exercise_id, body.exercise_id, body.exercise_id),
+         body.exercise_id, body.exercise_id),
     )
     db.commit()
     row = cur.fetchone()
