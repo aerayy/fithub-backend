@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import time
+from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cloudinary
@@ -67,7 +68,9 @@ def extract_public_id(url: str) -> str | None:
     # Strip extension
     if "." in after.rsplit("/", 1)[-1]:
         after = after.rsplit(".", 1)[0]
-    return after
+    # URL-decode — Cloudinary public_id'leri "%28" gibi encoded char'ları
+    # decode edilmiş halde bekler ("Squat-(Version-2)")
+    return unquote(after)
 
 
 def eager_one(public_id: str) -> tuple[str, bool, str]:

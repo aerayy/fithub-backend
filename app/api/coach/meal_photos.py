@@ -30,6 +30,7 @@ def get_student_meal_photos(
     # Don't filter by coach_user_id in meal_photos — just by client
     cur.execute(
         """SELECT mp.id, mp.meal_label, mp.photo_url, mp.is_retake, mp.created_at,
+                  mp.ai_analysis, mp.ai_analysis_status,
                   u.full_name as client_name
            FROM meal_photos mp
            JOIN users u ON u.id = mp.client_user_id
@@ -55,6 +56,7 @@ def get_recent_meal_photos(
 
     cur.execute(
         """SELECT mp.id, mp.meal_label, mp.photo_url, mp.is_retake, mp.created_at,
+                  mp.ai_analysis, mp.ai_analysis_status,
                   mp.client_user_id, u.full_name as client_name
            FROM meal_photos mp
            JOIN users u ON u.id = mp.client_user_id
