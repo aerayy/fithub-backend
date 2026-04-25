@@ -408,6 +408,133 @@ def approve_refund(
     return {"ok": True, **row}
 
 
+@router.post("/maintenance/activate-scheduled-drafts")
+def activate_scheduled_drafts(
+    db=Depends(get_db),
+    _admin_key=Depends(verify_admin_key),
+):
+    """
+    Zamanlanmış taslakları aktif programa dönüştür.
+    scheduled_at <= NOW() AND activated_at IS NULL koşulunu sağlayan taslakları
+    workout_programs / nutrition_programs tablolarına insert eder ve eskileri
+    deaktif yapar. Subscription'ın started_at/ends_at sayacı ilk assign'da set edilir.
+
+    Saatlik cron ile çağrılır (Render Cron Job veya CI scheduled task).
+    """
+    from psycopg2.extras import Json
+
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    activated_workout = []
+    activated_nutrition = []
+    skipped = []
+
+    # ── WORKOUT scheduled drafts ──
+    cur.execute(
+        """SELECT id, coach_user_id, client_user_id, name, payload
+           FROM workout_program_drafts
+           WHERE scheduled_at IS NOT NULL
+             AND activated_at IS NULL
+             AND scheduled_at <= NOW()"""
+    )
+    for d in cur.fetchall():
+        # Coach hâlâ bu öğrenciye atanmış mı? Aktif sub var mı?
+        cur.execute(
+            """SELECT 1 FROM clients c
+               JOIN subscriptions s ON s.client_user_id = c.user_id
+                                   AND s.coach_user_id = c.assigned_coach_id
+                                   AND s.status = 'active'
+               WHERE c.user_id = %s AND c.assigned_coach_id = %s""",
+            (d["client_user_id"], d["coach_user_id"]),
+        )
+        if not cur.fetchone():
+            skipped.append({"type": "workout", "draft_id": d["id"], "reason": "no_active_sub_or_unassigned"})
+            continue
+
+        # Eski aktif programları deaktif et
+        cur.execute(
+            "UPDATE workout_programs SET is_active = FALSE WHERE client_user_id = %s AND is_active = TRUE",
+            (d["client_user_id"],),
+        )
+        # Yeni aktif program
+        cur.execute(
+            """INSERT INTO workout_programs (client_user_id, coach_user_id, program_name, day_payload, is_active, created_at)
+               VALUES (%s, %s, %s, %s, TRUE, NOW()) RETURNING id""",
+            (d["client_user_id"], d["coach_user_id"], d["name"], Json(d["payload"])),
+        )
+        program_id = cur.fetchone()["id"]
+        # Subscription started_at/ends_at trigger
+        cur.execute(
+            """UPDATE subscriptions s
+               SET program_state = 'assigned',
+                   program_assigned_at = COALESCE(program_assigned_at, NOW()),
+                   started_at = COALESCE(started_at, NOW()),
+                   ends_at = COALESCE(ends_at,
+                                      NOW() + (COALESCE(p.duration_days, 30) || ' days')::INTERVAL)
+               FROM (SELECT id, duration_days FROM coach_packages) p
+               WHERE s.client_user_id = %s
+                 AND s.coach_user_id = %s
+                 AND s.status = 'active'
+                 AND p.id = s.package_id""",
+            (d["client_user_id"], d["coach_user_id"]),
+        )
+        # Draft'ı activated olarak işaretle (silmek yerine — audit için)
+        cur.execute(
+            "UPDATE workout_program_drafts SET activated_at = NOW() WHERE id = %s",
+            (d["id"],),
+        )
+        activated_workout.append({"draft_id": d["id"], "program_id": program_id, "client_user_id": d["client_user_id"]})
+
+    # ── NUTRITION scheduled drafts ──
+    cur.execute(
+        """SELECT id, coach_user_id, client_user_id, name, payload
+           FROM nutrition_program_drafts
+           WHERE scheduled_at IS NOT NULL
+             AND activated_at IS NULL
+             AND scheduled_at <= NOW()"""
+    )
+    for d in cur.fetchall():
+        cur.execute(
+            """SELECT 1 FROM clients c
+               JOIN subscriptions s ON s.client_user_id = c.user_id
+                                   AND s.coach_user_id = c.assigned_coach_id
+                                   AND s.status = 'active'
+               WHERE c.user_id = %s AND c.assigned_coach_id = %s""",
+            (d["client_user_id"], d["coach_user_id"]),
+        )
+        if not cur.fetchone():
+            skipped.append({"type": "nutrition", "draft_id": d["id"], "reason": "no_active_sub_or_unassigned"})
+            continue
+
+        cur.execute(
+            "UPDATE nutrition_programs SET is_active = FALSE WHERE client_user_id = %s AND is_active = TRUE",
+            (d["client_user_id"],),
+        )
+        cur.execute(
+            """INSERT INTO nutrition_programs (client_user_id, coach_user_id, program_name, plan_payload, is_active, created_at)
+               VALUES (%s, %s, %s, %s, TRUE, NOW()) RETURNING id""",
+            (d["client_user_id"], d["coach_user_id"], d["name"], Json(d["payload"])),
+        )
+        program_id = cur.fetchone()["id"]
+        cur.execute(
+            "UPDATE nutrition_program_drafts SET activated_at = NOW() WHERE id = %s",
+            (d["id"],),
+        )
+        activated_nutrition.append({"draft_id": d["id"], "program_id": program_id, "client_user_id": d["client_user_id"]})
+
+    db.commit()
+    return {
+        "ok": True,
+        "workout_activated": len(activated_workout),
+        "nutrition_activated": len(activated_nutrition),
+        "skipped": len(skipped),
+        "details": {
+            "workout": activated_workout,
+            "nutrition": activated_nutrition,
+            "skipped": skipped,
+        },
+    }
+
+
 @router.post("/maintenance/expire-subscriptions")
 def expire_stale_subscriptions(
     db=Depends(get_db),
