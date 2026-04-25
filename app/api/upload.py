@@ -23,6 +23,7 @@ ALLOWED_FOLDERS = {
     "profile": "fithub/profile-photos",
     "meal": "fithub/meal-photos",
     "body-form": "fithub/body-form",
+    "exercise-video": "fithub/exercise-videos",
 }
 
 
@@ -70,3 +71,57 @@ async def upload_image(
     except Exception as e:
         logger.error(f"Cloudinary upload failed: {e}")
         raise HTTPException(status_code=500, detail="Image upload failed")
+
+
+@router.post("/video")
+async def upload_video(
+    file: UploadFile = File(...),
+    folder: str = Query("exercise-video"),
+    current_user=Depends(get_current_user),
+):
+    """
+    Video upload — eager H.264 transcode upload anında yapılır.
+    Bu, Android cihazlarda HEVC oynama sorununu önler ve cold transcode delay
+    yaratmaz (varyant Cloudinary storage'a kalıcı eklenir).
+    """
+    if not CLOUDINARY_CLOUD_NAME:
+        raise HTTPException(status_code=500, detail="Cloudinary not configured")
+
+    cloud_folder = ALLOWED_FOLDERS.get(folder, "fithub/exercise-videos")
+
+    allowed_types = ["video/mp4", "video/quicktime", "video/webm", "video/x-matroska"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Video tipi desteklenmiyor: {file.content_type}",
+        )
+
+    contents = await file.read()
+    if len(contents) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Video çok büyük (max 100MB)")
+
+    try:
+        # Eager: upload anında H.264 varyantı kalıcı olarak üretilir.
+        # eager_async=True — büyük dosyalarda timeout olmasın diye.
+        result = cloudinary.uploader.upload(
+            contents,
+            folder=cloud_folder,
+            resource_type="video",
+            eager=[
+                {"format": "mp4", "video_codec": "h264", "quality": "auto"},
+            ],
+            eager_async=True,
+        )
+        return {
+            "url": result["secure_url"],
+            "public_id": result["public_id"],
+            "duration": result.get("duration"),
+            "width": result.get("width"),
+            "height": result.get("height"),
+            "size_bytes": len(contents),
+            "format": result.get("format"),
+            "eager": result.get("eager", []),
+        }
+    except Exception as e:
+        logger.error(f"Cloudinary video upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Video yükleme başarısız")
