@@ -1157,21 +1157,26 @@ def assign_latest_workout_program(
             (program_id,),
         )
 
-        # 3. Update program_assigned_at in subscriptions table (latest active/pending subscription)
+        # 3. Update subscription: ilk program assign'da started_at + ends_at set edilir.
+        # Sayaç buradan itibaren işlemeye başlar (purchase'tan değil).
         cur.execute(
             """
-            UPDATE subscriptions
-            SET program_assigned_at = NOW()
-            WHERE id = (
-                SELECT id
-                FROM subscriptions
+            UPDATE subscriptions s
+            SET program_assigned_at = COALESCE(program_assigned_at, NOW()),
+                started_at = COALESCE(started_at, NOW()),
+                ends_at = COALESCE(ends_at,
+                                   NOW() + (COALESCE(p.duration_days, 30) || ' days')::INTERVAL),
+                program_state = 'assigned'
+            FROM (SELECT id, duration_days FROM coach_packages) p
+            WHERE s.id = (
+                SELECT id FROM subscriptions
                 WHERE client_user_id = %s
                   AND coach_user_id = %s
                   AND status IN ('pending', 'active')
-                  AND (ends_at IS NULL OR ends_at > NOW())
                 ORDER BY purchased_at DESC
                 LIMIT 1
             )
+              AND p.id = s.package_id
             """,
             (student_user_id, coach_id),
         )
@@ -1258,21 +1263,25 @@ def assign_workout_program(
             (program_id,),
         )
 
-        # Update program_assigned_at in subscriptions table (latest active/pending subscription)
+        # Update subscription: ilk program assign'da started_at + ends_at set edilir.
         cur.execute(
             """
-            UPDATE subscriptions
-            SET program_assigned_at = NOW()
-            WHERE id = (
-                SELECT id
-                FROM subscriptions
+            UPDATE subscriptions s
+            SET program_assigned_at = COALESCE(program_assigned_at, NOW()),
+                started_at = COALESCE(started_at, NOW()),
+                ends_at = COALESCE(ends_at,
+                                   NOW() + (COALESCE(p.duration_days, 30) || ' days')::INTERVAL),
+                program_state = 'assigned'
+            FROM (SELECT id, duration_days FROM coach_packages) p
+            WHERE s.id = (
+                SELECT id FROM subscriptions
                 WHERE client_user_id = %s
                   AND coach_user_id = %s
                   AND status IN ('pending', 'active')
-                  AND (ends_at IS NULL OR ends_at > NOW())
                 ORDER BY purchased_at DESC
                 LIMIT 1
             )
+              AND p.id = s.package_id
             """,
             (student_user_id, coach_id),
         )

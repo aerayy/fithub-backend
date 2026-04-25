@@ -82,9 +82,13 @@ def checkout(
                 detail="Aktif aboneliğin var. Yeni paket almak için önce mevcut aboneliğini iptal etmelisin."
             )
 
-        # Calculate dates
-        started_at = datetime.utcnow()
-        ends_at = started_at + timedelta(days=duration_days)
+        # ÖNEMLİ: started_at ve ends_at NULL olarak başlar.
+        # Süre sayacı koç programı atadığında başlar (sub.started_at = NOW @ program assign).
+        # Bu sayede koç 3 gün sonra program yazsa bile öğrenci 30 gün hizmet alır.
+        started_at = None
+        ends_at = None
+        # Paketin duration_days değerini sub'da saklayacağız ki assign anında ends_at hesaplanabilsin.
+        # subscriptions tablosunda duration kolonu yok — coach_packages.duration_days üzerinden okunacak.
 
         # ✅ Generate subscription_ref in backend (NOT NULL constraint)
         subscription_ref = f"checkout_{client_user_id}_{coach_package_id}_{uuid.uuid4().hex}"

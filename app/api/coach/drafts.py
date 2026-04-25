@@ -198,10 +198,22 @@ def assign_workout_draft(
     )
     program_id = cur.fetchone()["id"]
 
-    # Update subscription
+    # Update subscription: ilk program assignında started_at + ends_at set edilir
+    # (öğrencinin paketi program atandığı anda başlar, satın alma anında değil)
     cur.execute(
-        """UPDATE subscriptions SET program_state = 'assigned', program_assigned_at = NOW()
-           WHERE client_user_id = %s AND coach_user_id = %s AND status = 'active'""",
+        """UPDATE subscriptions s
+           SET program_state = 'assigned',
+               program_assigned_at = COALESCE(program_assigned_at, NOW()),
+               started_at = COALESCE(started_at, NOW()),
+               ends_at = COALESCE(ends_at,
+                                  NOW() + (COALESCE(p.duration_days, 30) || ' days')::INTERVAL)
+           FROM (
+             SELECT id, duration_days FROM coach_packages
+           ) p
+           WHERE s.client_user_id = %s
+             AND s.coach_user_id = %s
+             AND s.status = 'active'
+             AND p.id = s.package_id""",
         (student_id, coach_id),
     )
 
@@ -354,10 +366,21 @@ def assign_nutrition_draft(
     )
     program_id = cur.fetchone()["id"]
 
-    # Update subscription
+    # Update subscription: nutrition program ilk atandığında da sayaç başlar
     cur.execute(
-        """UPDATE subscriptions SET program_state = 'assigned', program_assigned_at = NOW()
-           WHERE client_user_id = %s AND coach_user_id = %s AND status = 'active'""",
+        """UPDATE subscriptions s
+           SET program_state = 'assigned',
+               program_assigned_at = COALESCE(program_assigned_at, NOW()),
+               started_at = COALESCE(started_at, NOW()),
+               ends_at = COALESCE(ends_at,
+                                  NOW() + (COALESCE(p.duration_days, 30) || ' days')::INTERVAL)
+           FROM (
+             SELECT id, duration_days FROM coach_packages
+           ) p
+           WHERE s.client_user_id = %s
+             AND s.coach_user_id = %s
+             AND s.status = 'active'
+             AND p.id = s.package_id""",
         (student_id, coach_id),
     )
 

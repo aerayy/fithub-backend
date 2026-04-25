@@ -346,6 +346,68 @@ def create_coach(
         db.autocommit = original_autocommit
 
 
+@router.get("/refunds/pending")
+def list_pending_refunds(
+    db=Depends(get_db),
+    _admin_key=Depends(verify_admin_key),
+):
+    """
+    refund_requested_at set olmuş ama henüz işlenmemiş refund taleplerini listele.
+    """
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """
+        SELECT s.id, s.client_user_id, s.coach_user_id, s.plan_name,
+               s.started_at, s.ends_at, s.refund_requested_at,
+               u.email AS client_email, u.full_name AS client_name,
+               c.email AS coach_email, c.full_name AS coach_name
+        FROM subscriptions s
+        JOIN users u ON u.id = s.client_user_id
+        LEFT JOIN users c ON c.id = s.coach_user_id
+        WHERE s.refund_requested_at IS NOT NULL
+          AND s.refund_processed_at IS NULL
+        ORDER BY s.refund_requested_at ASC
+        """
+    )
+    rows = cur.fetchall()
+    for r in rows:
+        for k in ("started_at", "ends_at", "refund_requested_at"):
+            if r.get(k):
+                r[k] = r[k].isoformat()
+    return {"refunds": rows, "count": len(rows)}
+
+
+@router.post("/refunds/{subscription_id}/approve")
+def approve_refund(
+    subscription_id: int,
+    db=Depends(get_db),
+    _admin_key=Depends(verify_admin_key),
+):
+    """
+    Refund talebini onayla — refund_processed_at set edilir.
+    Para iadesi iyzico entegrasyonu sonrası buradan tetiklenecek (şimdilik manuel).
+    """
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """
+        UPDATE subscriptions
+        SET refund_processed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = %s
+          AND refund_requested_at IS NOT NULL
+          AND refund_processed_at IS NULL
+        RETURNING id, plan_name, refund_processed_at
+        """,
+        (subscription_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Bekleyen iade talebi bulunamadı")
+    db.commit()
+    row["refund_processed_at"] = row["refund_processed_at"].isoformat()
+    return {"ok": True, **row}
+
+
 @router.post("/maintenance/expire-subscriptions")
 def expire_stale_subscriptions(
     db=Depends(get_db),

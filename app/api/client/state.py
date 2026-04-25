@@ -55,7 +55,12 @@ def get_client_state(
                 program_assigned_at,
                 program_state,
                 coach_user_id,
-                package_id
+                package_id,
+                auto_renew,
+                canceled_at,
+                cancel_type,
+                refund_requested_at,
+                refund_processed_at
             FROM subscriptions
             WHERE client_user_id = %s
               AND coach_user_id = %s
@@ -81,7 +86,12 @@ def get_client_state(
                     program_assigned_at,
                     program_state,
                     coach_user_id,
-                    package_id
+                    package_id,
+                    auto_renew,
+                    canceled_at,
+                    cancel_type,
+                    refund_requested_at,
+                    refund_processed_at
                 FROM subscriptions
                 WHERE client_user_id = %s
                   AND coach_user_id = %s
@@ -106,7 +116,8 @@ def get_client_state(
                     is_expired = True
 
             subscription = dict(last_row)
-            for field in ["purchased_at", "started_at", "ends_at", "program_assigned_at"]:
+            for field in ["purchased_at", "started_at", "ends_at", "program_assigned_at",
+                          "canceled_at", "refund_requested_at", "refund_processed_at"]:
                 if subscription.get(field) is not None and isinstance(subscription[field], datetime):
                     subscription[field] = subscription[field].isoformat()
 
@@ -114,7 +125,8 @@ def get_client_state(
 
         # 4) Burada subscription_row kesin: status=active ve ends_at geçmemiş
         subscription = dict(subscription_row)
-        for field in ["purchased_at", "started_at", "ends_at", "program_assigned_at"]:
+        for field in ["purchased_at", "started_at", "ends_at", "program_assigned_at",
+                      "canceled_at", "refund_requested_at", "refund_processed_at"]:
             if subscription.get(field) is not None and isinstance(subscription[field], datetime):
                 subscription[field] = subscription[field].isoformat()
 

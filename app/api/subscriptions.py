@@ -246,15 +246,13 @@ def confirm_subscription(
         duration_days = package_info.get("duration_days")
         actual_coach_user_id = package_info["coach_user_id"]  # Use from DB, not parsed value
         
-        # Calculate ends_at if duration_days exists
+        # ÖNEMLİ: started_at ve ends_at NULL — sayaç koç program atadığında başlar.
+        # Öğrenci 30 günlük paket aldıysa, koç 3 gün sonra program yazsa bile,
+        # 30 günlük tam hizmet alır (purchase'tan değil, program_assigned_at'tan itibaren).
         now = datetime.utcnow()
-        started_at = now
+        started_at = None
         ends_at = None
-        if duration_days:
-            ends_at = started_at + timedelta(days=duration_days)
-            print(f"[SUBSCRIPTION_CONFIRM] Calculated ends_at: {ends_at} (duration_days={duration_days})")
-        else:
-            print(f"[SUBSCRIPTION_CONFIRM] No duration_days, ends_at will be NULL")
+        print(f"[SUBSCRIPTION_CONFIRM] started_at=NULL, ends_at=NULL (sayac program assign'da baslayacak, duration_days={duration_days})")
         
         # Idempotency: aynı client + package için zaten aktif sub varsa onu dön
         cur.execute(
