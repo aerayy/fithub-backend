@@ -438,12 +438,57 @@ def _generate_cardio(cur, client_user_id, profile):
 # ─── Helpers ───
 
 def _match_exercise(cur, name):
+    """Exercise name'i exercise_library'ye eşle, gif'li match döner.
+    Match olmazsa Plank gibi safe fallback döner — NULL dönmez ki video boş kalmasın."""
     if not name:
-        return None
+        return _safe_fallback_id(cur)
+
+    # 1) Exact match with gif
     cur.execute(
-        """SELECT id FROM exercise_library WHERE canonical_name ILIKE %s
-           ORDER BY CASE WHEN canonical_name ILIKE %s THEN 0 ELSE 1 END, length(canonical_name) ASC LIMIT 1""",
+        """SELECT id FROM exercise_library
+           WHERE canonical_name ILIKE %s
+             AND gif_url IS NOT NULL AND gif_url != ''
+           LIMIT 1""",
+        (name,),
+    )
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+
+    # 2) Partial match with gif preference
+    cur.execute(
+        """SELECT id FROM exercise_library
+           WHERE canonical_name ILIKE %s
+             AND gif_url IS NOT NULL AND gif_url != ''
+           ORDER BY CASE WHEN canonical_name ILIKE %s THEN 0 ELSE 1 END,
+                    length(canonical_name) ASC
+           LIMIT 1""",
         (f"%{name}%", f"{name}%"),
+    )
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+
+    # 3) Safe fallback — hiç bulunamazsa Plank veya benzeri
+    return _safe_fallback_id(cur)
+
+
+def _safe_fallback_id(cur):
+    """Hiç match yoksa garantili gif'li bir hareket id'si dön (Plank tercih)."""
+    for fallback_name in ("Plank", "Pushups", "Crunches"):
+        cur.execute(
+            """SELECT id FROM exercise_library
+               WHERE canonical_name ILIKE %s
+                 AND gif_url IS NOT NULL AND gif_url != ''
+               LIMIT 1""",
+            (fallback_name,),
+        )
+        row = cur.fetchone()
+        if row:
+            return row["id"]
+    # Son çare: gif'i olan herhangi bir hareket
+    cur.execute(
+        "SELECT id FROM exercise_library WHERE gif_url IS NOT NULL AND gif_url != '' LIMIT 1"
     )
     row = cur.fetchone()
     return row["id"] if row else None

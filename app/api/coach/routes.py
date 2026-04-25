@@ -18,18 +18,23 @@ from app.api.coach.activity import router as activity_router
 import re
 
 
-def _match_exercise_library(cur, exercise_name: str):
-    """Match exercise name to exercise_library, return (id, canonical_name, gif_url) or None.
-    Prioritizes: exact match > word-overlap score > ILIKE contains.
-    Always prefers exercises WITH gif_url."""
+def _match_exercise_library(cur, exercise_name: str, muscle_hint: str = ""):
+    """Match exercise name to exercise_library, return (id, canonical_name, gif_url).
+    Prioritizes: exact match > word-overlap score > ILIKE contains > muscle-hint fallback > universal safe.
+    NEVER returns None — workout sırasında video boş kalmasın diye en sonda evrensel
+    fallback (Plank gibi her zaman gif'i olan bir hareket) döner."""
     if not exercise_name:
-        return None
+        # Bile bile NULL almayalım — müşteri programında video boş kalmasın
+        return _safe_fallback_exercise(cur, muscle_hint)
 
     name = exercise_name.strip()
 
-    # 1. Exact match (case-insensitive)
+    # 1. Exact match (case-insensitive) — gif zorunlu
     cur.execute(
-        "SELECT id, canonical_name, gif_url FROM exercise_library WHERE canonical_name ILIKE %s LIMIT 1",
+        """SELECT id, canonical_name, gif_url FROM exercise_library
+           WHERE canonical_name ILIKE %s
+             AND gif_url IS NOT NULL AND gif_url != ''
+           LIMIT 1""",
         (name,)
     )
     row = cur.fetchone()
@@ -99,15 +104,74 @@ def _match_exercise_library(cur, exercise_name: str):
         if row:
             return row
 
-    # 4. Last resort: single ILIKE on full normalized name
+    # 4. Normalized ILIKE on full name
     normalized = re.sub(r'\s*\([^)]*\)', '', name).strip()
     cur.execute(
         """SELECT id, canonical_name, gif_url FROM exercise_library
            WHERE canonical_name ILIKE %s
-           ORDER BY (gif_url IS NOT NULL AND gif_url != '') DESC,
-                    length(canonical_name) ASC
+             AND gif_url IS NOT NULL AND gif_url != ''
+           ORDER BY length(canonical_name) ASC
            LIMIT 1""",
         (f"%{normalized}%",)
+    )
+    row = cur.fetchone()
+    if row:
+        return row
+
+    # 5. SON ÇARE: müşteri programında video boş kalmasın.
+    # AI hallucinate ettiyse veya isim DB'de yoksa, muscle hint'le güvenli alternatif döndür.
+    return _safe_fallback_exercise(cur, muscle_hint)
+
+
+# Universal güvenli fallback hareketler — hepsi DB'de gif'li olduğu doğrulandı
+_FALLBACK_BY_MUSCLE = {
+    "chest": "Pushups",
+    "back": "Bent Over Barbell Row",
+    "shoulders": "Dumbbell Shoulder Press",
+    "shoulder": "Dumbbell Shoulder Press",
+    "arms": "Dumbbell Bicep Curl",
+    "biceps": "Dumbbell Bicep Curl",
+    "triceps": "Bench Dips",
+    "quadriceps": "Leg Press",
+    "hamstrings": "Leg Press",
+    "legs": "Leg Press",
+    "glutes": "Assisted Bulgarian Split Squat",
+    "calves": "Standing Barbell Calf Raise",
+    "core": "Plank",
+    "abdominals": "Crunches",
+    "belly": "Crunches",
+}
+
+
+def _safe_fallback_exercise(cur, muscle_hint: str = ""):
+    """AI yanlış isim ürettiğinde NULL dönmesin diye evrensel fallback.
+    muscle_hint varsa ona göre, yoksa Plank gibi evrensel hareket."""
+    hint = (muscle_hint or "").lower().strip()
+
+    candidate_names = []
+    if hint and hint in _FALLBACK_BY_MUSCLE:
+        candidate_names.append(_FALLBACK_BY_MUSCLE[hint])
+    # Universal son çare — Plank her zaman çalışır
+    candidate_names.append("Plank")
+    candidate_names.append("Pushups")
+
+    for name in candidate_names:
+        cur.execute(
+            """SELECT id, canonical_name, gif_url FROM exercise_library
+               WHERE canonical_name ILIKE %s
+                 AND gif_url IS NOT NULL AND gif_url != ''
+               LIMIT 1""",
+            (name,),
+        )
+        row = cur.fetchone()
+        if row:
+            return row
+
+    # Daha da kötü ihtimalde: gif'i olan ANY exercise
+    cur.execute(
+        """SELECT id, canonical_name, gif_url FROM exercise_library
+           WHERE gif_url IS NOT NULL AND gif_url != ''
+           LIMIT 1"""
     )
     return cur.fetchone()
 
@@ -750,12 +814,17 @@ def generate_workout_program(
 {coach_examples}
 
 ═══ EGZERSİZ VERİTABANI ═══
-BİZİM DB'deki egzersiz isimlerinden SEÇ. İsim UYDURMA:
+🚨 KRİTİK: Aşağıdaki LİSTENİN DIŞINDA ASLA İSİM ÜRETME.
+Listedeki isimleri AYNEN, harf harf, parantez dahil kopyala.
+Liste dışı ürettiğin her isim sistemimizde "video yok" olarak gösterir — kullanıcıyı kötü etkiler.
+Eğer aklındaki bir hareket listede yoksa, listeden EN BENZER hareketi seç.
 
+LİSTE BAŞLIYOR:
 {exercise_list_str}
+LİSTE BİTTİ.
 
 ═══ PROGRAM YAZIM KURALLARI ═══
-1. Egzersiz isimleri YUKARIDAKI VERİTABANI LİSTESİNDEN BİREBİR KOPYALANMALI
+1. Egzersiz isimleri YUKARIDAKI LİSTEDEN BİREBİR KOPYALANMALI — liste dışı isim YASAK
 2. Kas grubu eşleştirmesi ÖRNEKLERE UYGUN olmalı:
    - 6 gün: Göğüs/Arka Kol → Sırt/Ön Kol → Omuz/Trapez → tekrar | Bacak ayrı gün
    - 5 gün: Göğüs/Arka Kol → Sırt/Ön Kol → Bacak → Omuz → Göğüs/Sırt (varyasyon)
@@ -811,13 +880,20 @@ Sadece JSON döndür:
                             ai_name = str(ex.get("name", ""))
 
                             # Match to DB — get correct name + gif
+                            # Muscle hint olarak day_key kullanılabilir (push/pull/legs themed days)
                             matched = _match_exercise_library(cur, ai_name)
                             if matched:
                                 resolved_name = matched["canonical_name"]
                                 library_id = matched["id"]
+                                # AI hallucinate ettiyse log et (canonical farklıysa)
+                                if (ai_name or "").strip().lower() != (resolved_name or "").strip().lower():
+                                    print(f"[AI_GENERATOR] AI ismi DB'de tam yok: '{ai_name}' → '{resolved_name}' (id={library_id})")
                             else:
+                                # _match_exercise_library artık her zaman bir şey döner (fallback ile)
+                                # Buraya düşmesi exercise_library tablosu boşsa olur — edge case
                                 resolved_name = ai_name
                                 library_id = None
+                                print(f"[AI_GENERATOR] UYARI: '{ai_name}' için hiç eşleşme yok, library_id=NULL")
 
                             week[day_key].append({
                                 "name": resolved_name,
