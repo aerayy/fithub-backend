@@ -20,6 +20,7 @@ cloudinary.config(
 
 ALLOWED_FOLDERS = {
     "chat": "fithub/chat",
+    "chat-voice": "fithub/chat-voice",
     "profile": "fithub/profile-photos",
     "meal": "fithub/meal-photos",
     "body-form": "fithub/body-form",
@@ -125,3 +126,49 @@ async def upload_video(
     except Exception as e:
         logger.error(f"Cloudinary video upload failed: {e}")
         raise HTTPException(status_code=500, detail="Video yükleme başarısız")
+
+
+@router.post("/voice")
+async def upload_voice(
+    file: UploadFile = File(...),
+    duration_sec: int = Query(0, description="Audio duration in seconds"),
+    current_user=Depends(get_current_user),
+):
+    """Sesli mesaj upload (chat icin). Cloudinary 'video' resource type kullanir
+    cunku ses dosyalari da bu kategoride yonetilir.
+
+    Frontend kayit formati: m4a (iOS) veya AAC (Android). Cloudinary
+    desteklediginden direkt upload eder.
+    """
+    if not CLOUDINARY_CLOUD_NAME:
+        raise HTTPException(status_code=500, detail="Cloudinary not configured")
+
+    cloud_folder = ALLOWED_FOLDERS["chat-voice"]
+
+    allowed_types = ["audio/mp4", "audio/m4a", "audio/aac", "audio/mpeg", "audio/wav", "audio/ogg", "audio/webm", "video/mp4"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Audio tipi desteklenmiyor: {file.content_type}",
+        )
+
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:  # 10MB max for voice (~10 min @ 128kbps)
+        raise HTTPException(status_code=400, detail="Sesli mesaj cok buyuk (max 10MB)")
+
+    try:
+        result = cloudinary.uploader.upload(
+            contents,
+            folder=cloud_folder,
+            resource_type="video",  # Cloudinary'de audio = video resource type
+        )
+        return {
+            "url": result["secure_url"],
+            "public_id": result["public_id"],
+            "duration_sec": int(result.get("duration") or duration_sec or 0),
+            "size_bytes": len(contents),
+            "format": result.get("format"),
+        }
+    except Exception as e:
+        logger.error(f"Cloudinary voice upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Sesli mesaj yuklenemedi")
