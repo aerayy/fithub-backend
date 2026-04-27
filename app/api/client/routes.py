@@ -109,3 +109,8 @@ try:
     from . import workout_sessions  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import home_bundle  # noqa: F401
+except Exception:
+    pass
