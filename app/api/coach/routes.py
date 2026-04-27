@@ -1277,6 +1277,92 @@ def assign_latest_workout_program(
         raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
+@router.post("/students/{student_user_id}/nutrition-programs/assign")
+def assign_latest_nutrition_program(
+    student_user_id: int,
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    """En son uretilen nutrition programini aktif yapar (workout ile simetri)."""
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute(
+        "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+        (student_user_id, coach_id),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+
+    try:
+        cur.execute(
+            """
+            SELECT id FROM nutrition_programs
+            WHERE client_user_id = %s AND coach_user_id = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (student_user_id, coach_id),
+        )
+        program = cur.fetchone()
+        if not program:
+            raise HTTPException(status_code=404, detail="Nutrition program not found")
+
+        program_id = program["id"]
+
+        # Eski aktifi pasifle
+        cur.execute(
+            "UPDATE nutrition_programs SET is_active = FALSE, updated_at = NOW() "
+            "WHERE client_user_id = %s AND is_active = TRUE",
+            (student_user_id,),
+        )
+        # Yeniyi aktif yap
+        cur.execute(
+            "UPDATE nutrition_programs SET is_active = TRUE, updated_at = NOW() WHERE id = %s",
+            (program_id,),
+        )
+
+        # Subscription program_state'i (workout ile ayni mantik)
+        cur.execute(
+            """
+            UPDATE subscriptions s
+            SET program_assigned_at = COALESCE(program_assigned_at, NOW()),
+                started_at = COALESCE(started_at, NOW()),
+                ends_at = COALESCE(ends_at,
+                                   NOW() + (COALESCE(p.duration_days, 30) || ' days')::INTERVAL),
+                program_state = 'assigned'
+            FROM (SELECT id, duration_days FROM coach_packages) p
+            WHERE s.id = (
+                SELECT id FROM subscriptions
+                WHERE client_user_id = %s
+                  AND coach_user_id = %s
+                  AND status IN ('pending', 'active')
+                ORDER BY purchased_at DESC
+                LIMIT 1
+            )
+              AND p.id = s.package_id
+            """,
+            (student_user_id, coach_id),
+        )
+
+        db.commit()
+
+        try:
+            from app.services.push_notification import notify_program_assigned
+            notify_program_assigned(student_user_id, "nutrition")
+        except Exception:
+            pass
+
+        return {"ok": True, "program_id": program_id}
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
+
+
 @router.post("/students/{student_user_id}/workout-programs/{program_id}/assign")
 def assign_workout_program(
     student_user_id: int,
@@ -1769,15 +1855,10 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
     if not week_data:
         raise HTTPException(status_code=500, detail="AI boş bir program döndürdü")
 
-    # 6. Save and activate (deactivate old, activate new)
+    # 6. Save as DRAFT (is_active=FALSE) — workout AI ile tutarli olmasi icin.
+    # Kocun "Program Ata" butonuna basmasi gerekir aktif olmasi icin.
     try:
-        # Deactivate all active nutrition programs for this student
-        cur.execute(
-            "UPDATE nutrition_programs SET is_active = FALSE, updated_at = NOW() WHERE client_user_id = %s AND is_active = TRUE",
-            (student_user_id,),
-        )
-
-        # Check for existing draft to reuse
+        # Check for existing draft to reuse (don't deactivate active program — sadece taslak hazirla)
         cur.execute("""
             SELECT id FROM nutrition_programs
             WHERE client_user_id = %s AND coach_user_id = %s AND is_active = FALSE
@@ -1788,11 +1869,11 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
         if existing:
             program_id = existing["id"]
             cur.execute("DELETE FROM nutrition_meals WHERE nutrition_program_id = %s", (program_id,))
-            cur.execute("UPDATE nutrition_programs SET is_active = TRUE, updated_at = NOW(), title = 'AI Beslenme Programı' WHERE id = %s", (program_id,))
+            cur.execute("UPDATE nutrition_programs SET updated_at = NOW(), title = 'AI Beslenme Programı' WHERE id = %s", (program_id,))
         else:
             cur.execute("""
                 INSERT INTO nutrition_programs (client_user_id, coach_user_id, title, is_active, created_at, updated_at)
-                VALUES (%s, %s, 'AI Beslenme Programı', TRUE, NOW(), NOW())
+                VALUES (%s, %s, 'AI Beslenme Programı', FALSE, NOW(), NOW())
                 RETURNING id
             """, (student_user_id, coach_id))
             row = cur.fetchone()

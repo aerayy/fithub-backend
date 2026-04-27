@@ -149,8 +149,28 @@ def get_week_sessions(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
-    """Get this week's finished days (mon-sun). Returns which days are completed."""
+    """Get finished workout dates (last 30 days).
+
+    Returns:
+      finished_dates: ["2026-04-27", "2026-04-25", ...]  ← Flutter bunu kullanir
+      finished_days: {"fri": true, ...}                  ← geriye uyumluluk
+
+    Carousel'de gun-gun tarihlerden olusuyor; eskiden day_key ile keylenmis
+    finished_days haftalar arasi tarih ayrimi yapamadigi icin gecmis haftadaki
+    aynı gunu de tikli gosteriyordu. Tarih tabanli liste artik bu sorunu cozer.
+    """
     cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """SELECT session_date, day_key, is_finished
+           FROM workout_sessions
+           WHERE user_id = %s
+             AND is_finished = TRUE
+             AND session_date >= CURRENT_DATE - interval '30 days'""",
+        (current_user["id"],),
+    )
+    rows = cur.fetchall()
+    finished_dates = [r["session_date"].isoformat() for r in rows]
+    # Backward compat: bu haftalik finished_days
     cur.execute(
         """SELECT day_key, is_finished
            FROM workout_sessions
@@ -159,6 +179,6 @@ def get_week_sessions(
              AND session_date < date_trunc('week', CURRENT_DATE) + interval '7 days'""",
         (current_user["id"],),
     )
-    rows = cur.fetchall()
-    finished_days = {r["day_key"]: r["is_finished"] for r in rows}
-    return {"finished_days": finished_days}
+    rows_week = cur.fetchall()
+    finished_days = {r["day_key"]: r["is_finished"] for r in rows_week}
+    return {"finished_dates": finished_dates, "finished_days": finished_days}
