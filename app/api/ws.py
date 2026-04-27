@@ -196,6 +196,23 @@ async def _handle_send_message(sender_id: int, sender_role: str, data: dict):
         await manager.send_to_user(sender_id, sender_payload)
         await manager.send_to_user(recipient_id, msg_payload)
 
+        # Push notification — recipient cihazinda app kapali ise FCM ile uyarir.
+        # Cift yonlu: koc → ogrenci VE ogrenci → koc (eskiden sadece tek yondu).
+        try:
+            cur.execute(
+                "SELECT full_name FROM users WHERE id = %s",
+                (sender_id,),
+            )
+            sender_row = cur.fetchone()
+            sender_name = sender_row["full_name"] if sender_row else "Yeni mesaj"
+
+            preview = body if message_type == "text" and body else ("[Foto]" if message_type == "image" else "Yeni mesaj")
+
+            from app.services.push_notification import notify_message_to
+            notify_message_to(recipient_id, sender_name, preview, conversation_id=conversation_id)
+        except Exception as push_err:
+            logger.warning(f"Push notification gonderilemedi: {push_err}")
+
     except Exception as e:
         logger.error(f"WS _handle_send_message error: {e}")
         conn.rollback()

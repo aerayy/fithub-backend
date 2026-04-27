@@ -311,6 +311,23 @@ def send_client_message(
     except Exception:
         pass
 
+    # Push notification to coach (öğrenci REST üzerinden mesaj attı, koç push alsın)
+    try:
+        cur.execute(
+            "SELECT coach_user_id FROM conversations WHERE id = %s",
+            (conversation_id,),
+        )
+        conv = cur.fetchone()
+        if conv:
+            cur.execute("SELECT full_name FROM users WHERE id = %s", (client_user_id,))
+            sender = cur.fetchone()
+            sender_name = sender["full_name"] if sender else "Öğrenci"
+            preview = body.body if body.message_type == "text" and body.body else "[Foto]"
+            from app.services.push_notification import notify_message_to
+            notify_message_to(conv["coach_user_id"], sender_name, preview, conversation_id=conversation_id)
+    except Exception:
+        pass  # push fail message save'ini etkilemesin
+
     return {
         "id": row["id"],
         "sender_type": row["sender_type"],

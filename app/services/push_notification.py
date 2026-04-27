@@ -129,11 +129,24 @@ def notify_program_updated(client_user_id: int, program_type: str = "workout"):
 
 
 def notify_new_message(client_user_id: int, coach_name: str, preview: str):
-    """Notify client of a new coach message."""
+    """[DEPRECATED] Geriye uyumluluk icin tutuluyor — yeni kod notify_message_to() kullanmali."""
+    notify_message_to(client_user_id, coach_name, preview)
+
+
+def notify_message_to(recipient_user_id: int, sender_name: str, preview: str, conversation_id: int = None):
+    """Tarafsiz mesaj push'u — koc → ogrenci ya da ogrenci → koc, ikisi de ayni fonksiyon.
+
+    title: gonderenin adi
+    body:  mesaj on izlemesi (100 karakter)
+    data:  type=new_message, conversation_id (varsa) — Flutter app navigate ederken kullanir
+    """
     body = preview[:100] if preview else "Yeni bir mesajiniz var"
+    payload = {"type": "new_message"}
+    if conversation_id is not None:
+        payload["conversation_id"] = str(conversation_id)
     send_notification(
-        client_user_id,
-        coach_name,
+        recipient_user_id,
+        sender_name or "Yeni mesaj",
         body,
-        {"type": "new_message"},
+        payload,
     )
