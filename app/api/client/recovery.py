@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/recovery-tips")
-def get_recovery_tips(
+async def get_recovery_tips(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
@@ -57,12 +57,12 @@ def get_recovery_tips(
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
-        from openai import OpenAI
+        from openai import AsyncOpenAI
     except ImportError:
         raise HTTPException(status_code=500, detail="OpenAI library not installed")
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
         age = client_data.get("age") or "unknown"
         weight = client_data.get("weight_kg") or "unknown"
@@ -130,7 +130,7 @@ Rules:
 - Actions should be specific and doable today
 - Write in Turkish language"""
 
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {

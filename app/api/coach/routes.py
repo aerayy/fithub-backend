@@ -584,7 +584,7 @@ def _normalize_reps(reps_value):
 
 
 @router.post("/students/{student_user_id}/workout-programs/generate")
-def generate_workout_program(
+async def generate_workout_program(
     student_user_id: int,
     db=Depends(get_db),
     current_user=Depends(require_role("coach")),
@@ -640,12 +640,12 @@ def generate_workout_program(
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
-        from openai import OpenAI
+        from openai import AsyncOpenAI
     except ImportError:
         raise HTTPException(status_code=500, detail="OpenAI library not installed.")
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
         # ── Extract onboarding data ──
         age = client_data.get("age") or "bilinmiyor"
@@ -851,7 +851,7 @@ Sadece JSON döndür:
 }}"""
 
         # Call OpenAI
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Sen 10+ yıl deneyimli profesyonel bir fitness koçusun. Binlerce öğrenciye program yazmışsın. Öğrencinin profiline ve tercihlerine göre kişiselleştirilmiş, gerçek bir koçun yazacağı kalitede antrenman programları oluşturursun. Süperset kullanımı, doğru kas grubu eşleştirmesi ve egzersiz sıralaması konusunda uzmansın. Sadece JSON formatında yanıt ver."},
@@ -1442,7 +1442,7 @@ def save_nutrition_program(
 
 
 @router.post("/students/{student_user_id}/nutrition-programs/generate")
-def generate_nutrition_program(
+async def generate_nutrition_program(
     student_user_id: int,
     payload: dict = Body(...),
     db=Depends(get_db),
@@ -1699,14 +1699,14 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
 }}"""
 
     # 5. Call OpenAI
-    from openai import OpenAI as _OpenAI
+    from openai import AsyncOpenAI as _AsyncOpenAI
 
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
-        ai_client = _OpenAI(api_key=OPENAI_API_KEY)
-        response = ai_client.chat.completions.create(
+        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY)
+        response = await ai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Sen Türkiye'de 10+ yıl deneyimli, binlerce danışana beslenme programı yazmış profesyonel bir beslenme koçusun. Türk mutfağına uygun, pratik, makro hedeflerine birebir uyan ve gerçek koç kalitesinde haftalık beslenme programları hazırlıyorsun. Öğün zamanlaması, antrenman günü/dinlenme günü ayrımı ve supplement yerleştirme konusunda uzmansın. Sadece JSON formatında yanıt ver."},

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/daily-motivation")
-def get_daily_motivation(
+async def get_daily_motivation(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
@@ -68,12 +68,12 @@ def get_daily_motivation(
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
-        from openai import OpenAI
+        from openai import AsyncOpenAI
     except ImportError:
         raise HTTPException(status_code=500, detail="OpenAI library not installed")
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
         client_name = client_data.get("full_name") or "Sporcu"
         goal = client_data.get("your_goal") or "genel fitness"
@@ -112,7 +112,7 @@ Rules:
 - Türkçe yaz
 - Emoji sadece tek bir emoji olmalı"""
 
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {

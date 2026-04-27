@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/weekly-challenge")
-def get_weekly_challenge(
+async def get_weekly_challenge(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
@@ -55,12 +55,12 @@ def get_weekly_challenge(
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
     try:
-        from openai import OpenAI
+        from openai import AsyncOpenAI
     except ImportError:
         raise HTTPException(status_code=500, detail="OpenAI library not installed")
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
         age = client_data.get("age") or "bilinmiyor"
         gender = client_data.get("gender") or "bilinmiyor"
@@ -109,7 +109,7 @@ Rules:
 - Türkçe yaz
 - Emoji tek bir emoji olmalı"""
 
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {
