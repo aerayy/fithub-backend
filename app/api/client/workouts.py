@@ -142,10 +142,47 @@ def _inject_gif_urls(payload: Dict, exercises: List[Dict]) -> Dict:
     return payload
 
 
-def build_week_response(program: Dict, days: List[Dict]) -> Dict[str, Any]:
+def _fetch_universal_fallback_gif(cur) -> Optional[str]:
+    """KIRMIZI CIZGI safety net: gif'i olan evrensel bir hareket (Plank) URL'i.
+    Read endpoint'inde herhangi bir egzersizin gif_url'i bos kalirsa bununla doldurulur.
+    Boylece UI hicbir zaman 'GORSEL EKLENMEDI' gostermez."""
+    cur.execute(
+        """SELECT gif_url FROM exercise_library
+           WHERE canonical_name ILIKE 'Plank'
+             AND gif_url IS NOT NULL AND gif_url != ''
+           LIMIT 1"""
+    )
+    row = cur.fetchone()
+    if row:
+        # row dict (RealDictCursor) veya tuple olabilir
+        return row.get("gif_url") if hasattr(row, "get") else row[0]
+    # Plank yoksa gif'i olan herhangi bir hareket
+    cur.execute(
+        "SELECT gif_url FROM exercise_library WHERE gif_url IS NOT NULL AND gif_url != '' LIMIT 1"
+    )
+    row = cur.fetchone()
+    if row:
+        return row.get("gif_url") if hasattr(row, "get") else row[0]
+    return None
+
+
+def _ensure_all_items_have_gif(payload: Dict, fallback_gif_url: Optional[str]) -> None:
+    """Inject sonrasi son guvenlik agi: bos kalan her item'a fallback URL'i koy."""
+    if not fallback_gif_url:
+        return
+    for block in payload.get("blocks", []):
+        for item in block.get("items", []):
+            current = item.get("gif_url")
+            if not current or not str(current).strip():
+                item["gif_url"] = fallback_gif_url
+
+
+def build_week_response(program: Dict, days: List[Dict], fallback_gif_url: Optional[str] = None) -> Dict[str, Any]:
     """
     Build the week response structure from program and days.
     Returns: { "mon": dayPayloadOrNull, "tue": ..., ... }
+
+    fallback_gif_url: KIRMIZI CIZGI safety net — bos gif_url'lere bu URL atanir.
     """
     week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     week = {day: None for day in week_days}
@@ -171,6 +208,8 @@ def build_week_response(program: Dict, days: List[Dict]) -> Dict[str, Any]:
                 if isinstance(payload, dict):
                     # Inject gif_url from exercises into payload items
                     _inject_gif_urls(payload, exercises)
+                    # Defansif son katman: hala bos kalan item varsa fallback URL koy
+                    _ensure_all_items_have_gif(payload, fallback_gif_url)
                     week[day_key] = payload
                     continue
             except (json.JSONDecodeError, TypeError):
@@ -178,7 +217,9 @@ def build_week_response(program: Dict, days: List[Dict]) -> Dict[str, Any]:
 
         # Backward compatibility: build from exercises
         if exercises:
-            week[day_key] = build_day_payload_from_flat_exercises(exercises, program_title)
+            payload = build_day_payload_from_flat_exercises(exercises, program_title)
+            _ensure_all_items_have_gif(payload, fallback_gif_url)
+            week[day_key] = payload
         # If no exercises and no payload, leave as None
 
     return week
@@ -208,8 +249,12 @@ def get_active_workout_for_client(
         if not program_data:
             raise HTTPException(status_code=404, detail="Active workout program not found")
 
+        # KIRMIZI CIZGI safety net: bos kalan gif_url'leri Plank ile doldur
+        cur = db.cursor(cursor_factory=RealDictCursor)
+        fallback_gif = _fetch_universal_fallback_gif(cur)
+
         # Build week response
-        week = build_week_response(program_data, program_data.get("days", []))
+        week = build_week_response(program_data, program_data.get("days", []), fallback_gif)
 
         # Return in the requested format
         return {

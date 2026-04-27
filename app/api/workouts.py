@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from app.core.security import require_role
+from app.api.coach.routes import _match_exercise_library
 
 router = APIRouter(prefix="/workouts", tags=["workouts"])
 
@@ -156,12 +157,16 @@ def set_active_workout(
             day_id = cur.fetchone()["id"]
 
             for ex in day.exercises:
+                # KIRMIZI CIZGI: matcher'dan gec ki lib_id NOT NULL constraint'i karsilansin
+                matched = _match_exercise_library(cur, ex.exercise_name)
+                lib_id = matched["id"] if matched else None
+                resolved_name = matched["canonical_name"] if matched else ex.exercise_name
                 cur.execute(
                     """
-                    INSERT INTO workout_exercises (workout_day_id, exercise_name, sets, reps, notes, order_index, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    INSERT INTO workout_exercises (workout_day_id, exercise_name, sets, reps, notes, order_index, exercise_library_id, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
                     """,
-                    (day_id, ex.exercise_name, ex.sets, ex.reps, ex.notes, ex.order_index),
+                    (day_id, resolved_name, ex.sets, ex.reps, ex.notes, ex.order_index, lib_id),
                 )
 
         db.commit()

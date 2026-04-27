@@ -42,7 +42,8 @@ def _match_exercise_library(cur, exercise_name: str, muscle_hint: str = ""):
         return row
 
     # 2. Word-overlap scoring — split search into words, find best match
-    raw_words = [w.lower() for w in re.sub(r'[^a-zA-Z0-9\s]', '', name).split() if len(w) > 2]
+    # Hyphen ve diger noktalama BOSLUKLA degistirilir ki "Step-Up" → "Step Up" parcalanabilsin
+    raw_words = [w.lower() for w in re.sub(r'[^a-zA-Z0-9\s]+', ' ', name).split() if len(w) > 2]
     # Simple stemming: remove trailing 's' for plural (Rows→Row, Curls→Curl, Flyes→Fly)
     words = []
     for w in raw_words:
