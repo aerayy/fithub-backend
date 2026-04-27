@@ -120,12 +120,17 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
 
 
 async def _handle_send_message(sender_id: int, sender_role: str, data: dict):
-    """Save message to DB and broadcast to both participants."""
+    """Save message to DB and broadcast to both participants.
+
+    temp_id (opsiyonel): client-generated geçici ID. Sender'a geri yansıtılır,
+    optimistic UI ile birebir eşleştirme için (gönderdiği mesajla server'dan
+    gelen mesajı match etsin)."""
     conversation_id = data.get("conversation_id")
     body = data.get("body")
     message_type = data.get("message_type", "text")
     media_url = data.get("media_url")
     media_metadata = data.get("media_metadata")
+    temp_id = data.get("temp_id")  # client-generated optimistic UI ID
 
     if not conversation_id:
         return
@@ -184,7 +189,11 @@ async def _handle_send_message(sender_id: int, sender_role: str, data: dict):
             },
         }
 
-        await manager.send_to_user(sender_id, msg_payload)
+        # Sender'a temp_id ile birlikte gönder (optimistic UI eşleştirmesi).
+        # Recipient'a temp_id GİTMESİN (onun için gereksiz alan).
+        sender_payload = {**msg_payload, "message": {**msg_payload["message"], "temp_id": temp_id}} if temp_id else msg_payload
+
+        await manager.send_to_user(sender_id, sender_payload)
         await manager.send_to_user(recipient_id, msg_payload)
 
     except Exception as e:
