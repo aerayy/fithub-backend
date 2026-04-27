@@ -74,28 +74,33 @@ def _get_client_active_coach(cur, client_user_id: int):
 
 @router.get("/conversations")
 def list_client_conversations(
+    include_archived: bool = Query(False, description="Arsivlenmis sohbetleri de doner"),
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
-    """List conversations for the current client. Optionally auto-create one with their coach."""
+    """List conversations for the current client. Default: arşivli olmayanlar."""
     client_user_id = current_user["id"]
     cur = db.cursor()
 
+    archive_filter = "" if include_archived else "AND c.archived_at IS NULL"
+
     # Only show conversations with coaches who have active subscriptions
     cur.execute(
-        """
+        f"""
         SELECT
             c.id,
             c.coach_user_id,
+            c.archived_at,
             COALESCE(u.full_name, u.email) AS coach_name,
             COALESCE(co.photo_url, u.profile_photo_url) AS coach_photo_url,
-            (SELECT CASE WHEN message_type = 'image' THEN '[Foto]' ELSE body END FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_preview,
+            (SELECT CASE WHEN message_type = 'image' THEN '[Foto]' WHEN message_type = 'voice' THEN '[Sesli mesaj]' ELSE body END FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_preview,
             (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_message_at,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'coach' AND m.read_at IS NULL) AS unread_count
         FROM conversations c
         JOIN users u ON u.id = c.coach_user_id
         LEFT JOIN coaches co ON co.user_id = c.coach_user_id
         WHERE c.client_user_id = %s
+          {archive_filter}
           AND EXISTS (
             SELECT 1 FROM subscriptions s
             WHERE s.client_user_id = c.client_user_id
@@ -212,6 +217,73 @@ def list_client_messages(
             "read_at": r["read_at"].isoformat() if r.get("read_at") and hasattr(r["read_at"], "isoformat") else r.get("read_at"),
         })
     return {"messages": messages, "has_more": has_more}
+
+
+@router.get("/conversations/{conversation_id}/messages/search")
+def search_client_messages(
+    conversation_id: int,
+    q: str = Query(..., min_length=1, description="Search query"),
+    limit: int = Query(20, ge=1, le=50),
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """Sohbet icinde mesaj arama (body ILIKE). pg_trgm GIN index ile hizli.
+    Sadece text mesajlarini doner — image/voice URL'leri arama disindadir."""
+    client_user_id = current_user["id"]
+    cur = db.cursor()
+    _ensure_client_conversation(cur, conversation_id, client_user_id)
+
+    cur.execute(
+        """
+        SELECT id, sender_type, body, message_type, created_at
+        FROM messages
+        WHERE conversation_id = %s
+          AND message_type = 'text'
+          AND body ILIKE %s
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (conversation_id, f"%{q}%", limit),
+    )
+    rows = cur.fetchall() or []
+    return {
+        "results": [
+            {
+                "id": r["id"],
+                "sender_type": r["sender_type"],
+                "body": r["body"],
+                "created_at": r["created_at"].isoformat() if r.get("created_at") and hasattr(r["created_at"], "isoformat") else r.get("created_at"),
+            }
+            for r in rows
+        ],
+        "query": q,
+    }
+
+
+@router.patch("/conversations/{conversation_id}/archive")
+def toggle_conversation_archive(
+    conversation_id: int,
+    body: dict,
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """Sohbeti arsivle / arsivden cikar. body: {archived: true|false}"""
+    client_user_id = current_user["id"]
+    cur = db.cursor()
+    _ensure_client_conversation(cur, conversation_id, client_user_id)
+    archived = bool(body.get("archived", True))
+    if archived:
+        cur.execute(
+            "UPDATE conversations SET archived_at = NOW() WHERE id = %s",
+            (conversation_id,),
+        )
+    else:
+        cur.execute(
+            "UPDATE conversations SET archived_at = NULL WHERE id = %s",
+            (conversation_id,),
+        )
+    db.commit()
+    return {"ok": True, "archived": archived}
 
 
 @router.post("/conversations")
