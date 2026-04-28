@@ -71,7 +71,9 @@ def get_all_students_from_subscriptions(
                 s.started_at,
                 s.ends_at,
                 s.created_at AS purchased_at,
-                s.plan_name
+                s.plan_name,
+                s.program_state,
+                s.program_assigned_at
             FROM subscriptions s
             WHERE s.coach_user_id = %s
             ORDER BY s.client_user_id, s.created_at DESC
@@ -87,10 +89,26 @@ def get_all_students_from_subscriptions(
             l.started_at,
             l.ends_at,
             l.purchased_at,
+            l.program_state,
+            l.program_assigned_at,
             CASE
                 WHEN l.status = 'active' AND l.ends_at > NOW() THEN TRUE
                 ELSE FALSE
-            END AS is_active
+            END AS is_active,
+            -- Tek alanda derived state — Flutter'in /client/state ile ayni mantik:
+            -- PROGRAM_ASSIGNED: aktif sub + program atandi
+            -- PURCHASED_WAITING: aktif sub ama program henuz atanmadi
+            -- EXPIRED: sub bitti
+            -- CANCELED: kullanici iptal etti
+            -- PENDING: aktiflestirilme bekliyor
+            CASE
+                WHEN l.status = 'active' AND l.ends_at > NOW() AND l.program_state = 'assigned' THEN 'PROGRAM_ASSIGNED'
+                WHEN l.status = 'active' AND l.ends_at > NOW() THEN 'PURCHASED_WAITING'
+                WHEN l.status = 'expired' OR (l.ends_at IS NOT NULL AND l.ends_at <= NOW()) THEN 'EXPIRED'
+                WHEN l.status = 'canceled' THEN 'CANCELED'
+                WHEN l.status = 'pending' THEN 'PENDING'
+                ELSE COALESCE(UPPER(l.status), 'UNKNOWN')
+            END AS client_state
         FROM latest l
         JOIN users u ON u.id = l.client_user_id
         LEFT JOIN clients c ON c.user_id = u.id
@@ -118,14 +136,25 @@ def get_active_students_from_subscriptions(
             u.profile_photo_url,
             COALESCE(o.full_name, u.email) AS full_name,
             c.goal_type,
+            s.status,
             s.plan_name,
             s.ends_at,
-            EXTRACT(DAY FROM s.ends_at - NOW())::int AS days_left
+            s.program_state,
+            s.program_assigned_at,
+            EXTRACT(DAY FROM s.ends_at - NOW())::int AS days_left,
+            CASE
+                WHEN s.status = 'active' AND s.ends_at > NOW() AND s.program_state = 'assigned' THEN 'PROGRAM_ASSIGNED'
+                WHEN s.status = 'active' AND s.ends_at > NOW() THEN 'PURCHASED_WAITING'
+                WHEN s.status = 'expired' OR (s.ends_at IS NOT NULL AND s.ends_at <= NOW()) THEN 'EXPIRED'
+                WHEN s.status = 'canceled' THEN 'CANCELED'
+                WHEN s.status = 'pending' THEN 'PENDING'
+                ELSE COALESCE(UPPER(s.status), 'UNKNOWN')
+            END AS client_state
         FROM clients c
         JOIN users u ON u.id = c.user_id
         LEFT JOIN client_onboarding o ON o.user_id = u.id
         LEFT JOIN LATERAL (
-            SELECT plan_name, ends_at
+            SELECT status, plan_name, ends_at, program_state, program_assigned_at
             FROM subscriptions
             WHERE client_user_id = u.id AND coach_user_id = %s
             ORDER BY id DESC
