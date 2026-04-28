@@ -50,10 +50,13 @@ def get_my_profile(
         cur.execute("SELECT full_name FROM users WHERE id = %s", (coach_id,))
         user = cur.fetchone()
         code = _generate_referral_code(cur, user["full_name"] if user else "COACH")
+        # Yeni kayit olan koc DEFAULT pasif/gizli — kendi profilini hazirlayinca
+        # MyProfile UI'daki toggle ile aktif eder. Pasif koclar referral kodla
+        # ulasilamaz (coaches.py:151 kontrolu).
         cur.execute(
             """
             INSERT INTO coaches (user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active, referral_code)
-            VALUES (%s, '', NULL, NULL, 0, 0, ARRAY[]::text[], NULL, TRUE, %s)
+            VALUES (%s, '', NULL, NULL, 0, 0, ARRAY[]::text[], NULL, FALSE, %s)
             RETURNING user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active, referral_code
             """,
             (coach_id, code),

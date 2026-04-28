@@ -2263,13 +2263,14 @@ def get_my_profile(
     row = cur.fetchone()
 
     if not row:
-        # Yeni koc — auto-generate referral code
+        # Yeni koc — auto-generate referral code, profil DEFAULT KAPALI
+        # (koc hazir olunca MyProfile'da toggle ile aktif eder)
         from app.api.coach.profile import _generate_referral_code
         ref_code = _generate_referral_code(cur, current_user.get("full_name") or current_user.get("email") or "COACH")
         cur.execute(
             """
             INSERT INTO coaches (user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active, referral_code)
-            VALUES (%s, '', NULL, NULL, 0, 0, ARRAY[]::text[], NULL, TRUE, %s)
+            VALUES (%s, '', NULL, NULL, 0, 0, ARRAY[]::text[], NULL, FALSE, %s)
             RETURNING user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active, referral_code
             """,
             (coach_id, ref_code),
