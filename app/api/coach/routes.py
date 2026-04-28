@@ -2252,6 +2252,7 @@ def get_my_profile(
         """
         SELECT c.user_id, c.bio, c.photo_url, c.price_per_month, c.rating, c.rating_count,
                c.specialties, c.instagram, c.twitter, c.linkedin, c.website, c.is_active, c.title, c.certificates, c.photos,
+               c.referral_code,
                u.email, COALESCE(u.full_name, u.email) AS full_name
         FROM coaches c
         JOIN users u ON u.id = c.user_id
@@ -2262,13 +2263,16 @@ def get_my_profile(
     row = cur.fetchone()
 
     if not row:
+        # Yeni koc — auto-generate referral code
+        from app.api.coach.profile import _generate_referral_code
+        ref_code = _generate_referral_code(cur, current_user.get("full_name") or current_user.get("email") or "COACH")
         cur.execute(
             """
-            INSERT INTO coaches (user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active)
-            VALUES (%s, '', NULL, NULL, 0, 0, ARRAY[]::text[], NULL, TRUE)
-            RETURNING user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active
+            INSERT INTO coaches (user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active, referral_code)
+            VALUES (%s, '', NULL, NULL, 0, 0, ARRAY[]::text[], NULL, TRUE, %s)
+            RETURNING user_id, bio, photo_url, price_per_month, rating, rating_count, specialties, instagram, is_active, referral_code
             """,
-            (coach_id,),
+            (coach_id, ref_code),
         )
         row = cur.fetchone()
         db.commit()
