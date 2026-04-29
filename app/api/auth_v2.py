@@ -37,8 +37,12 @@ class RegisterRequest(BaseModel):
     @classmethod
     def validate_phone(cls, v):
         cleaned = re.sub(r'[^0-9]', '', v)
-        if cleaned.startswith('90'):
+        # +90 ulkekodu varsa cikar
+        if cleaned.startswith('90') and len(cleaned) == 12:
             cleaned = cleaned[2:]
+        # leading 0 varsa cikar (Flutter "05415418585" gonderiyor)
+        if cleaned.startswith('0') and len(cleaned) == 11:
+            cleaned = cleaned[1:]
         if not cleaned.startswith('5') or len(cleaned) != 10:
             raise ValueError('Geçersiz telefon numarası. Örnek: 05xx xxx xx xx')
         return f'+90{cleaned}'
