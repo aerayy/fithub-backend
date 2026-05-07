@@ -1806,6 +1806,7 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
         raise HTTPException(status_code=500, detail="OpenAI API anahtarı yapılandırılmamış")
 
     import time as _time
+    import asyncio as _asyncio
     week_data: dict = {}
     raw_content: Optional[str] = None
     try:
@@ -1814,18 +1815,33 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
             "nutrition_generate: start coach=%s student=%s meal_count=%s diet=%s prompt_chars=%s catalog_rows=%s",
             coach_id, student_user_id, meal_count, diet_type, len(prompt), len(db_foods),
         )
+
+        async def _do_openai_call():
+            return await ai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Sen Türkiye'de 10+ yıl deneyimli, binlerce danışana beslenme programı yazmış profesyonel bir beslenme koçusun. Türk mutfağına uygun, pratik, makro hedeflerine birebir uyan ve gerçek koç kalitesinde haftalık beslenme programları hazırlıyorsun. Öğün zamanlaması, antrenman günü/dinlenme günü ayrımı ve supplement yerleştirme konusunda uzmansın. Sadece JSON formatında yanıt ver."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.4,
+                max_tokens=8000,
+                timeout=120.0,
+            )
+
         _t0 = _time.monotonic()
-        response = await ai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Sen Türkiye'de 10+ yıl deneyimli, binlerce danışana beslenme programı yazmış profesyonel bir beslenme koçusun. Türk mutfağına uygun, pratik, makro hedeflerine birebir uyan ve gerçek koç kalitesinde haftalık beslenme programları hazırlıyorsun. Öğün zamanlaması, antrenman günü/dinlenme günü ayrımı ve supplement yerleştirme konusunda uzmansın. Sadece JSON formatında yanıt ver."},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.4,
-            max_tokens=8000,
-            timeout=120.0,
-        )
+        try:
+            # SDK timeout sometimes silently fails on hung TCP — wrap in asyncio.wait_for
+            # which is enforced at the event-loop level regardless of SDK behavior.
+            response = await _asyncio.wait_for(_do_openai_call(), timeout=110.0)
+        except _asyncio.TimeoutError:
+            _ai_dur = _time.monotonic() - _t0
+            logger.error(
+                "nutrition_generate: asyncio_timeout after %.1fs (SDK hung) coach=%s student=%s prompt_chars=%s",
+                _ai_dur, coach_id, student_user_id, len(prompt),
+            )
+            raise HTTPException(status_code=504, detail="AI 110 saniyede yanıt vermedi, tekrar deneyin")
+
         _ai_dur = _time.monotonic() - _t0
         logger.warning(
             "nutrition_generate: openai_done duration=%.1fs usage=%s finish=%s",
