@@ -1643,8 +1643,9 @@ async def generate_nutrition_program(
     """)
     db_foods = cur.fetchall() or []
 
-    # Build compact food list for prompt
-    food_lines = []
+    # Build compact food list for prompt — header bir kez, sonra sadece "ad|kcal|P|C|F|birim"
+    # Eski format (~80 char/satir) -> ~30 char/satir, ~3x token tasarrufu
+    food_lines = ["# Format: ad | kcal | P(g) | C(g) | F(g) | birim (100g veya 1 birim)"]
     for f in db_foods:
         name = f["name"] or ""
         unit = f.get("serving_unit") or "g"
@@ -1652,10 +1653,8 @@ async def generate_nutrition_program(
         prot = f.get("prot") or 0
         fat = f.get("fat") or 0
         carb = f.get("carb") or 0
-        if unit == "g":
-            food_lines.append(f"{name} | 100g: {cal}kcal P:{prot} C:{carb} F:{fat}")
-        else:
-            food_lines.append(f"{name} | 1 {unit}: {cal}kcal P:{prot} C:{carb} F:{fat}")
+        unit_label = "100g" if unit == "g" else f"1 {unit}"
+        food_lines.append(f"{name}|{cal}|{prot}|{carb}|{fat}|{unit_label}")
 
     food_catalog = "\n".join(food_lines)
 
@@ -1806,14 +1805,16 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
         logger.error("nutrition_generate: OPENAI_API_KEY not configured")
         raise HTTPException(status_code=500, detail="OpenAI API anahtarı yapılandırılmamış")
 
+    import time as _time
     week_data: dict = {}
     raw_content: Optional[str] = None
     try:
-        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=150.0, max_retries=1)
-        logger.info(
-            "nutrition_generate: start coach=%s student=%s meal_count=%s diet=%s prompt_len=%s catalog_rows=%s",
+        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=120.0, max_retries=1)
+        logger.warning(
+            "nutrition_generate: start coach=%s student=%s meal_count=%s diet=%s prompt_chars=%s catalog_rows=%s",
             coach_id, student_user_id, meal_count, diet_type, len(prompt), len(db_foods),
         )
+        _t0 = _time.monotonic()
         response = await ai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -1823,6 +1824,13 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
             response_format={"type": "json_object"},
             temperature=0.4,
             max_tokens=8000,
+            timeout=120.0,
+        )
+        _ai_dur = _time.monotonic() - _t0
+        logger.warning(
+            "nutrition_generate: openai_done duration=%.1fs usage=%s finish=%s",
+            _ai_dur, getattr(response, "usage", None),
+            getattr(response.choices[0], "finish_reason", None) if response.choices else None,
         )
 
         choice = response.choices[0] if response and response.choices else None
@@ -1905,9 +1913,9 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
                         item.setdefault("carbs", 0)
                         item.setdefault("fat", 0)
 
-        logger.info(
-            "nutrition_generate: enriched ok hits=%s misses=%s usage=%s",
-            hit_count, miss_count, getattr(response, "usage", None),
+        logger.warning(
+            "nutrition_generate: enriched ok hits=%s misses=%s",
+            hit_count, miss_count,
         )
 
     except HTTPException:
@@ -1970,7 +1978,7 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
                 """, (program_id, meal_type, content, order_counter, planned_time))
 
         db.commit()
-        logger.info(
+        logger.warning(
             "nutrition_generate: saved program_id=%s meals=%s coach=%s student=%s",
             program_id, order_counter, coach_id, student_user_id,
         )
