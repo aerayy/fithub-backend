@@ -1816,9 +1816,9 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
             coach_id, student_user_id, meal_count, diet_type, len(prompt), len(db_foods),
         )
 
-        async def _do_openai_call():
-            return await ai_client.chat.completions.create(
-                model="gpt-4o-mini",
+        async def _do_stream_call():
+            stream = await ai_client.chat.completions.create(
+                model="gpt-4.1-mini",
                 messages=[
                     {"role": "system", "content": "Sen Türkiye'de 10+ yıl deneyimli, binlerce danışana beslenme programı yazmış profesyonel bir beslenme koçusun. Türk mutfağına uygun, pratik, makro hedeflerine birebir uyan ve gerçek koç kalitesinde haftalık beslenme programları hazırlıyorsun. Öğün zamanlaması, antrenman günü/dinlenme günü ayrımı ve supplement yerleştirme konusunda uzmansın. Sadece JSON formatında yanıt ver."},
                     {"role": "user", "content": prompt}
@@ -1826,44 +1826,64 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
                 response_format={"type": "json_object"},
                 temperature=0.4,
                 max_tokens=8000,
-                timeout=120.0,
+                stream=True,
+                stream_options={"include_usage": True},
             )
+            parts: list[str] = []
+            local_finish: Optional[str] = None
+            local_usage = None
+            first_chunk_at: Optional[float] = None
+            chunk_count = 0
+            async for chunk in stream:
+                if first_chunk_at is None:
+                    first_chunk_at = _time.monotonic()
+                chunk_count += 1
+                if chunk.choices:
+                    ch = chunk.choices[0]
+                    delta = getattr(ch, "delta", None)
+                    if delta is not None and getattr(delta, "content", None):
+                        parts.append(delta.content)
+                    if getattr(ch, "finish_reason", None):
+                        local_finish = ch.finish_reason
+                if getattr(chunk, "usage", None):
+                    local_usage = chunk.usage
+            return "".join(parts), local_finish, local_usage, first_chunk_at, chunk_count
 
         _t0 = _time.monotonic()
         try:
-            # SDK timeout sometimes silently fails on hung TCP — wrap in asyncio.wait_for
-            # which is enforced at the event-loop level regardless of SDK behavior.
-            response = await _asyncio.wait_for(_do_openai_call(), timeout=110.0)
+            # Streaming + asyncio.wait_for: stream'in her chunk'ı event-loop'u canlı tutar,
+            # 110s'de zorla keser. SDK'nın silently-ignored timeout bug'ından bağımsız.
+            raw_content, finish_reason, usage_obj, first_at, chunk_count = await _asyncio.wait_for(
+                _do_stream_call(), timeout=110.0
+            )
         except _asyncio.TimeoutError:
             _ai_dur = _time.monotonic() - _t0
             logger.error(
-                "nutrition_generate: asyncio_timeout after %.1fs (SDK hung) coach=%s student=%s prompt_chars=%s",
+                "nutrition_generate: asyncio_timeout after %.1fs (stream stalled) coach=%s student=%s prompt_chars=%s",
                 _ai_dur, coach_id, student_user_id, len(prompt),
             )
             raise HTTPException(status_code=504, detail="AI 110 saniyede yanıt vermedi, tekrar deneyin")
 
         _ai_dur = _time.monotonic() - _t0
+        ttfb = (first_at - _t0) if first_at else None
         logger.warning(
-            "nutrition_generate: openai_done duration=%.1fs usage=%s finish=%s",
-            _ai_dur, getattr(response, "usage", None),
-            getattr(response.choices[0], "finish_reason", None) if response.choices else None,
+            "nutrition_generate: stream_done duration=%.1fs ttfb=%s chunks=%s finish=%s usage=%s content_len=%s",
+            _ai_dur,
+            f"{ttfb:.1f}s" if ttfb is not None else "n/a",
+            chunk_count, finish_reason, usage_obj, len(raw_content) if raw_content else 0,
         )
-
-        choice = response.choices[0] if response and response.choices else None
-        finish_reason = getattr(choice, "finish_reason", None) if choice else None
-        raw_content = (choice.message.content if choice and choice.message else None)
 
         if not raw_content:
             logger.error(
                 "nutrition_generate: empty content finish_reason=%s usage=%s",
-                finish_reason, getattr(response, "usage", None),
+                finish_reason, usage_obj,
             )
             raise HTTPException(status_code=502, detail="AI boş yanıt döndürdü, tekrar deneyin")
 
         if finish_reason == "length":
             logger.error(
                 "nutrition_generate: output truncated by max_tokens, usage=%s",
-                getattr(response, "usage", None),
+                usage_obj,
             )
             raise HTTPException(status_code=502, detail="AI yanıtı çok uzun, lütfen öğün sayısını azaltıp tekrar deneyin")
 
