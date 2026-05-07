@@ -1754,15 +1754,13 @@ BU ÖĞÜN YAPISINI VE ZAMANLAMASINI TAKLİT ET:
 
 {nutrition_examples}
 
-═══ BESİN VERİTABANI ═══
-SADECE bu listeden seç, isim UYDURMA:
-
-{food_catalog}
+═══ BESİN İSİMLERİ ═══
+Türk mutfağında yaygın olan besinleri kullan: Yumurta, Tavuk Göğsü, Hindi Eti, Somon, Ton Balığı, Dana Kıyma, Beyaz Peynir, Lor Peyniri, Kaşar Peyniri, Yoğurt, Süt, Basmati Pirinç, Esmer Pirinç, Bulgur, Yulaf Ezmesi, Tam Buğday Ekmeği, Makarna, Patates, Tatlı Patates, Brokoli, Ispanak, Salatalık, Domates, Biber, Marul, Havuç, Soğan, Sarımsak, Elma, Muz, Çilek, Portakal, Zeytin yağı, Ceviz, Badem, Avokado, Bal, Tahin, Pekmez vb.
+İsimleri standart Türkçe yaz, makro YAZMA (biz hesaplarız).
 
 ═══ PROGRAM KURALLARI ═══
 1. Her gün {meal_count} öğün — koç örneklerindeki gibi isimlendir
-2. Besin isimleri VERİTABANINDAN BİREBİR KOPYALANMALI
-3. KRİTİK: Her öğünde EN AZ 3-5 BESİN olmalı — tek besin koyma! Gerçek bir yemek tabağı gibi düşün:
+2. KRİTİK: Her öğünde EN AZ 3-5 BESİN olmalı — tek besin koyma! Gerçek bir yemek tabağı gibi düşün:
    - Protein kaynağı (et/tavuk/balık/yumurta)
    - Karbonhidrat kaynağı (pirinç/makarna/patates/ekmek)
    - Sebze/salata
