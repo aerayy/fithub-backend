@@ -1,4 +1,13 @@
 # app/main.py
+import logging
+import os as _os_cfg
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    force=True,
+)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -65,4 +74,12 @@ app.include_router(ai_coach_router)
 app.include_router(ai_coach_purchase_router)
 app.include_router(auth_v2_router)
 app.include_router(superadmin_router)
+
+
+@app.get("/_version")
+def _version():
+    return {
+        "commit": _os_cfg.getenv("RENDER_GIT_COMMIT", "unknown")[:12],
+        "service": _os_cfg.getenv("RENDER_SERVICE_NAME", "local"),
+    }
 
