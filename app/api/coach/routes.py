@@ -5,6 +5,7 @@ from typing import Optional, List
 import json
 import os
 import logging
+import unicodedata
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg2.extras import RealDictCursor
 import psycopg2
@@ -16,6 +17,19 @@ from app.api.coach.conversations import router as conversations_router
 from app.api.coach.body_form import router as body_form_router
 from app.api.coach.activity import router as activity_router
 import re
+
+logger = logging.getLogger(__name__)
+
+
+def _tr_lower(s: str) -> str:
+    """Turkish-aware lowercase + NFKC normalize. Used for case-insensitive food name matching.
+    Default Python ``str.lower()`` turns "İ" into "i̇" (combining dot above), which never
+    matches a plain "i" in the DB. We normalize both sides through this helper instead."""
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", s).strip()
+    s = s.replace("İ", "i").replace("I", "ı")
+    return s.lower()
 
 
 def _match_exercise_library(cur, exercise_name: str, muscle_hint: str = ""):
@@ -1786,12 +1800,20 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
 
     # 5. Call OpenAI
     from openai import AsyncOpenAI as _AsyncOpenAI
+    from openai import APITimeoutError, APIConnectionError, RateLimitError, BadRequestError
 
     if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+        logger.error("nutrition_generate: OPENAI_API_KEY not configured")
+        raise HTTPException(status_code=500, detail="OpenAI API anahtarı yapılandırılmamış")
 
+    week_data: dict = {}
+    raw_content: Optional[str] = None
     try:
-        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY)
+        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=150.0, max_retries=1)
+        logger.info(
+            "nutrition_generate: start coach=%s student=%s meal_count=%s diet=%s prompt_len=%s catalog_rows=%s",
+            coach_id, student_user_id, meal_count, diet_type, len(prompt), len(db_foods),
+        )
         response = await ai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -1799,17 +1821,49 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.8,
+            temperature=0.4,
+            max_tokens=8000,
         )
-        result = json.loads(response.choices[0].message.content)
-        week_data = result.get("week", {})
 
-        # Build food lookup from DB for macro calculation
+        choice = response.choices[0] if response and response.choices else None
+        finish_reason = getattr(choice, "finish_reason", None) if choice else None
+        raw_content = (choice.message.content if choice and choice.message else None)
+
+        if not raw_content:
+            logger.error(
+                "nutrition_generate: empty content finish_reason=%s usage=%s",
+                finish_reason, getattr(response, "usage", None),
+            )
+            raise HTTPException(status_code=502, detail="AI boş yanıt döndürdü, tekrar deneyin")
+
+        if finish_reason == "length":
+            logger.error(
+                "nutrition_generate: output truncated by max_tokens, usage=%s",
+                getattr(response, "usage", None),
+            )
+            raise HTTPException(status_code=502, detail="AI yanıtı çok uzun, lütfen öğün sayısını azaltıp tekrar deneyin")
+
+        try:
+            result = json.loads(raw_content)
+        except json.JSONDecodeError as je:
+            logger.error(
+                "nutrition_generate: invalid JSON finish_reason=%s err=%s preview=%s",
+                finish_reason, je, raw_content[:300],
+            )
+            raise HTTPException(status_code=502, detail="AI bozuk JSON döndürdü, tekrar deneyin")
+
+        week_data = result.get("week", {}) if isinstance(result, dict) else {}
+
+        if not week_data or not isinstance(week_data, dict):
+            logger.error("nutrition_generate: missing 'week' key in response, keys=%s", list(result.keys()) if isinstance(result, dict) else type(result))
+            raise HTTPException(status_code=502, detail="AI beklenen formatta yanıt vermedi")
+
+        # Build food lookup from DB for macro calculation (Turkish-aware normalize)
         food_lookup = {}
         for f in db_foods:
-            name = (f["name"] or "").strip().lower()
-            if name:
-                food_lookup[name] = {
+            key = _tr_lower(f["name"] or "")
+            if key:
+                food_lookup[key] = {
                     "cal": float(f.get("cal") or 0),
                     "prot": float(f.get("prot") or 0),
                     "carb": float(f.get("carb") or 0),
@@ -1818,16 +1872,18 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
                 }
 
         # Enrich AI output with calculated macros from DB
+        miss_count = 0
+        hit_count = 0
         for day_key, day_data in week_data.items():
             if not isinstance(day_data, dict):
                 continue
             for meal in day_data.get("meals", []):
                 for item in meal.get("items", []):
                     name_tr = (item.get("name_tr") or "").strip()
-                    lookup_key = name_tr.lower()
-                    db_food = food_lookup.get(lookup_key)
+                    db_food = food_lookup.get(_tr_lower(name_tr))
 
                     if db_food:
+                        hit_count += 1
                         amount = float(item.get("amount") or item.get("grams") or 100)
                         unit = item.get("unit") or db_food["unit"]
 
@@ -1842,21 +1898,39 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
                         item["carbs"] = round(db_food["carb"] * ratio, 1)
                         item["fat"] = round(db_food["fat"] * ratio, 1)
                     else:
-                        # Not found in DB — keep as is with 0 macros
+                        miss_count += 1
                         item["grams"] = float(item.get("amount") or item.get("grams") or 0)
                         item.setdefault("calories", 0)
                         item.setdefault("protein", 0)
                         item.setdefault("carbs", 0)
                         item.setdefault("fat", 0)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
+        logger.info(
+            "nutrition_generate: enriched ok hits=%s misses=%s usage=%s",
+            hit_count, miss_count, getattr(response, "usage", None),
+        )
 
-    if not week_data:
-        raise HTTPException(status_code=500, detail="AI boş bir program döndürdü")
+    except HTTPException:
+        raise
+    except APITimeoutError as e:
+        logger.exception("nutrition_generate: openai timeout")
+        raise HTTPException(status_code=504, detail="AI zaman aşımına uğradı, lütfen tekrar deneyin")
+    except APIConnectionError as e:
+        logger.exception("nutrition_generate: openai connection error")
+        raise HTTPException(status_code=502, detail="AI servisine bağlanılamadı, tekrar deneyin")
+    except RateLimitError as e:
+        logger.exception("nutrition_generate: openai rate limit")
+        raise HTTPException(status_code=429, detail="AI servisi yoğun, lütfen biraz sonra tekrar deneyin")
+    except BadRequestError as e:
+        logger.exception("nutrition_generate: openai bad request")
+        raise HTTPException(status_code=502, detail="AI isteği reddedildi, lütfen ayarları gözden geçirip tekrar deneyin")
+    except Exception as e:
+        logger.exception("nutrition_generate: unexpected error in AI call")
+        raise HTTPException(status_code=500, detail="Beslenme programı oluşturulurken hata oluştu, tekrar deneyin")
 
     # 6. Save as DRAFT (is_active=FALSE) — workout AI ile tutarli olmasi icin.
     # Kocun "Program Ata" butonuna basmasi gerekir aktif olmasi icin.
+    week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     try:
         # Check for existing draft to reuse (don't deactivate active program — sadece taslak hazirla)
         cur.execute("""
@@ -1880,7 +1954,6 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
             program_id = row["id"] if isinstance(row, dict) else row[0]
 
         # Insert meals per day — day_key stored in meal_type as "mon:1. Öğün"
-        week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
         order_counter = 0
         for day_key in week_days:
             day_data = week_data.get(day_key, {})
@@ -1897,9 +1970,19 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
                 """, (program_id, meal_type, content, order_counter, planned_time))
 
         db.commit()
+        logger.info(
+            "nutrition_generate: saved program_id=%s meals=%s coach=%s student=%s",
+            program_id, order_counter, coach_id, student_user_id,
+        )
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
+        logger.exception("nutrition_generate: db write failed coach=%s student=%s", coach_id, student_user_id)
+        raise HTTPException(status_code=500, detail="Beslenme programı kaydedilemedi, tekrar deneyin")
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
 
     # 7. Build response — week with per-day meals
     response_week = {}
