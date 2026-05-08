@@ -2083,7 +2083,8 @@ async def generate_nutrition_program_v2(
             SELECT co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
                    co.target_weight_kg, co.experience, co.workout_place,
                    co.food_allergies, co.health_problems, co.supplements,
-                   co.preferred_workout_days,
+                   co.preferred_workout_days, co.preferred_workout_hours,
+                   co.wakeup_time, co.sleep_time, co.nutrition_budget,
                    COALESCE(co.full_name, u.full_name, u.email) AS client_name
             FROM client_onboarding co
             JOIN users u ON u.id = co.user_id
@@ -2105,6 +2106,10 @@ async def generate_nutrition_program_v2(
         workout_place = onb.get("workout_place") or []
         allergies = onb.get("food_allergies") or []
         health_problems = onb.get("health_problems") or []
+        wakeup_time = onb.get("wakeup_time") or "07:00"
+        sleep_time = onb.get("sleep_time") or "23:00"
+        workout_hours = onb.get("preferred_workout_hours") or ""
+        nutrition_budget = onb.get("nutrition_budget") or ""
 
         # 3. Form inputs
         meal_count = int(payload.get("meal_count") or 5)
@@ -2143,19 +2148,18 @@ async def generate_nutrition_program_v2(
                 target_fat = int(target_calories * 0.25 / 9)
                 target_carbs = int((target_calories - target_protein * 4 - target_fat * 9) / 4)
 
-        # 4. RAG: top 3 BeGreens plans for similar profile
+        # 4. RAG: top 3 BeGreens plans for similar profile (exact meal_count first, relax if empty)
         similar = find_similar_nutrition_plans(
             db, age=age, weight_kg=weight, height_cm=height,
-            meal_count=meal_count, top_n=3,
+            meal_count=meal_count, meal_count_window=1, top_n=3,
         )
         if not similar:
-            # Fallback: relax constraints, try again
             similar = find_similar_nutrition_plans(
                 db, age=age, weight_kg=weight, height_cm=height,
-                meal_count=meal_count, top_n=3,
+                meal_count=meal_count, meal_count_window=3, top_n=3,
             )
         if not similar:
-            logger.warning("nutrition_v2: no RAG candidates for profile age=%s w=%s h=%s", age, weight, height)
+            logger.warning("nutrition_v2: no RAG candidates for profile age=%s w=%s h=%s mc=%s", age, weight, height, meal_count)
             raise HTTPException(status_code=503, detail="Benzer profil bulunamadı, lütfen daha sonra deneyin")
 
         plan_contents = [fetch_plan_content(db, p["plan_id"]) for p in similar]
@@ -2260,29 +2264,42 @@ async def generate_nutrition_program_v2(
 - Antrenman yeri: {workout_place}
 - Alerji: {allergies_text}
 - Sağlık durumu: {health_text}
+- Bütçe: {nutrition_budget or "—"}
+
+ÖĞRENCİNİN GÜNLÜK RİTMİ (öğün saatlerini buna göre planla!)
+- Uyanma saati: {wakeup_time}
+- Yatma saati: {sleep_time}
+- Antrenman saati: {workout_hours or "—"}
+- Antrenman günleri: {tr_days}
 
 GÜNLÜK MAKRO HEDEFİ
 - Kalori: {target_calories} kcal | Protein: {target_protein}g | Karb: {target_carbs}g | Yağ: {target_fat}g
 
 KOÇ PARAMETRELERİ
-- Öğün sayısı: {meal_count}
+- Öğün sayısı: TAM {meal_count} öğün/gün (eksik veya fazla YAZMA)
 - Diyet tipi: {diet_type}
-- Antrenman günleri: {tr_days}
 - Supplement dahil: {"evet" if include_supplements else "hayır"}
 - Koç notu: {coach_notes or "—"}
 
 {rag_block}
 
-GÖREVİN
-Yukarıdaki 3 referans programı **şablon** olarak kullan. Öğrencinin profiline ve koç parametrelerine göre 7 GÜNLÜK haftalık beslenme programı oluştur.
-- Öğün isimlerini ve saatlerini referans programlardan al (örn. "1. ÖĞÜN KAHVALTI 08:00")
-- Her gün {meal_count} öğün
-- Antrenman günlerinde sporun öncesi/sonrası ek öğünler ekle (örn. "ANTRENMAN ÖNCESİ ARA ÖĞÜN", "SPORDAN SONRA YAPILACAKLAR")
-- Her öğünde 3-5 besin
-- Besin isimleri SADECE veriyi sağlanan enum'dan seçilebilir (zaten kontrol edilecek)
-- Birim sadece şu enum'dan: g, ml, adet, Porsiyon, Yemek Kaşığı, Çay Kaşığı, Servis, dilim, fincan, bardak
-- Günler arası çeşitlilik sağla
-- Türk mutfağına uygun yemekler (referans programlardan ilham al)"""
+═══ KESİN KURALLAR ═══
+1. **TAM {meal_count} ÖĞÜN/GÜN** — bu sayı pazartesi'den pazar'a 7 gün boyunca aynı.
+   Antrenman günlerinde Pre/Post-workout supplement öğünleri **bu sayıya dahil**, ek değil.
+2. **ÖĞÜN SAATLERİ ÖĞRENCİNİN RİTMİNE UYGUN OLMALI**:
+   - 1. öğün uyanma saatinden ({wakeup_time}) ~30 dk sonra
+   - Son öğün yatma saatinden ({sleep_time}) en az 1 saat önce
+   - Öğünler arası ~3 saat
+   - Antrenman saati varsa: 1.5-2 saat öncesi karb-ağırlıklı, sonrası protein-ağırlıklı
+3. **ÇEŞİTLİLİK** — her gün için **farklı** besin kombinasyonları kullan:
+   - Pazartesi tavuk, Salı somon, Çarşamba hindi, Perşembe kıyma...
+   - Pazartesi pilav, Salı bulgur, Çarşamba makarna, Perşembe patates...
+   - 7 gün boyunca **aynı menüyü tekrar etme**
+4. **ÖĞÜN İSİMLERİ** — referans programlardaki gibi: "1. ÖĞÜN KAHVALTI", "2. ÖĞÜN", "ANTRENMAN ÖNCESİ ARA ÖĞÜN", "SPORDAN SONRA", "GECE YATMADAN ÖNCE" gibi açıklayıcı.
+5. Her öğünde 3-5 besin (tek besinli öğün YAZMA — protein + karb + sebze + yağ kombinasyonu)
+6. Besin isimleri SADECE verilen enum'dan (schema kontrol edecek)
+7. Birim enum'undan: g, ml, adet, Porsiyon, Yemek Kaşığı, Çay Kaşığı, Servis, dilim, fincan, bardak
+8. Türk mutfağına uygun yemekler (referans programlardan ilham al)"""
 
         # 8. OpenAI call (constrained, structured outputs)
         from openai import AsyncOpenAI as _AsyncOpenAI

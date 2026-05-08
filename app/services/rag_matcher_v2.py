@@ -15,6 +15,7 @@ def find_similar_nutrition_plans(
     weight_kg: float,
     height_cm: int,
     meal_count: int = 5,
+    meal_count_window: int = 1,
     top_n: int = 3,
 ) -> list[dict]:
     """Return top-N nutrition plans whose user profile is closest to (age, weight, height).
@@ -32,7 +33,8 @@ def find_similar_nutrition_plans(
         age_lo, age_hi = max(15, age - 8), min(80, age + 8)
         w_lo, w_hi = max(35.0, weight_kg - 15), min(200.0, weight_kg + 15)
         h_lo, h_hi = max(140, height_cm - 15), min(220, height_cm + 15)
-        meal_lo, meal_hi = max(3, meal_count - 2), min(10, meal_count + 2)
+        meal_lo = max(3, meal_count - meal_count_window)
+        meal_hi = min(10, meal_count + meal_count_window)
 
         cur.execute(
             """
