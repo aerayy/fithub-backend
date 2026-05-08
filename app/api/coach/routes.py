@@ -32,6 +32,110 @@ def _tr_lower(s: str) -> str:
     return s.lower()
 
 
+_DAY_KEY_NORMALIZE = {
+    "monday": "mon", "tuesday": "tue", "wednesday": "wed", "thursday": "thu",
+    "friday": "fri", "saturday": "sat", "sunday": "sun",
+    "pazartesi": "mon", "salı": "tue", "sali": "tue", "çarşamba": "wed",
+    "carsamba": "wed", "perşembe": "thu", "persembe": "thu", "cuma": "fri",
+    "cumartesi": "sat", "pazar": "sun",
+    "mon": "mon", "tue": "tue", "wed": "wed", "thu": "thu",
+    "fri": "fri", "sat": "sat", "sun": "sun",
+}
+
+
+def _normalize_workout_days(items) -> set[str]:
+    """Convert a mixed list of day names into a set of {mon,tue,...,sun}."""
+    out: set[str] = set()
+    if not items:
+        return out
+    for d in items:
+        if not d:
+            continue
+        s = str(d).strip().lower()
+        key = _DAY_KEY_NORMALIZE.get(s)
+        if key:
+            out.add(key)
+    return out
+
+
+def _meal_template_for_day(meal_count: int, is_workout_day: bool) -> list[dict]:
+    """Return the canonical meal sequence for a given meal_count + day type.
+
+    Each entry: {position, name, kind, min_kcal, max_kcal, time_hint, notes}
+    kind: 'main' (Kahvaltı/Öğle/Akşam — gerçek yemek), 'snack' (ara öğün),
+          'preworkout' (antrenman öncesi), 'postworkout' (antrenman sonrası)
+    """
+    n = max(3, min(7, int(meal_count or 5)))
+
+    if n == 3:
+        return [
+            {"name": "1. ÖĞÜN KAHVALTI", "kind": "main", "min_kcal": 400, "time_hint": "uyanma+30dk"},
+            {"name": "2. ÖĞÜN ÖĞLE YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "12:00-14:00"},
+            {"name": "3. ÖĞÜN AKŞAM YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "yatmadan 2 saat önce"},
+        ]
+    if n == 4:
+        return [
+            {"name": "1. ÖĞÜN KAHVALTI", "kind": "main", "min_kcal": 400, "time_hint": "uyanma+30dk"},
+            {"name": "2. ÖĞÜN ARA ÖĞÜN", "kind": "snack", "min_kcal": 150, "time_hint": "kahvaltıdan ~3 saat sonra"},
+            {"name": "3. ÖĞÜN ÖĞLE YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "12:00-14:00"},
+            {"name": "4. ÖĞÜN AKŞAM YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "yatmadan 2 saat önce"},
+        ]
+    if n == 5:
+        if is_workout_day:
+            return [
+                {"name": "1. ÖĞÜN KAHVALTI", "kind": "main", "min_kcal": 400, "time_hint": "uyanma+30dk"},
+                {"name": "2. ÖĞÜN ARA ÖĞÜN", "kind": "snack", "min_kcal": 150, "time_hint": "10:00 civarı"},
+                {"name": "3. ÖĞÜN ÖĞLE YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "12:30-14:00"},
+                {"name": "4. ÖĞÜN ANTRENMAN ÖNCESİ ARA", "kind": "preworkout", "min_kcal": 200, "time_hint": "antrenmandan 1.5-2 saat önce, karb ağırlıklı"},
+                {"name": "5. ÖĞÜN AKŞAM YEMEĞİ", "kind": "main", "min_kcal": 450, "time_hint": "antrenmandan sonra ana yemek"},
+            ]
+        return [
+            {"name": "1. ÖĞÜN KAHVALTI", "kind": "main", "min_kcal": 400, "time_hint": "uyanma+30dk"},
+            {"name": "2. ÖĞÜN ARA ÖĞÜN", "kind": "snack", "min_kcal": 150, "time_hint": "10:00 civarı"},
+            {"name": "3. ÖĞÜN ÖĞLE YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "12:30-14:00"},
+            {"name": "4. ÖĞÜN İKİNDİ ARA", "kind": "snack", "min_kcal": 200, "time_hint": "16:00-17:00"},
+            {"name": "5. ÖĞÜN AKŞAM YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "yatmadan 2 saat önce"},
+        ]
+    if n == 6:
+        if is_workout_day:
+            return [
+                {"name": "1. ÖĞÜN KAHVALTI", "kind": "main", "min_kcal": 400, "time_hint": "uyanma+30dk"},
+                {"name": "2. ÖĞÜN ARA ÖĞÜN", "kind": "snack", "min_kcal": 150, "time_hint": "10:00 civarı"},
+                {"name": "3. ÖĞÜN ÖĞLE YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "12:30-14:00"},
+                {"name": "4. ÖĞÜN ANTRENMAN ÖNCESİ ARA", "kind": "preworkout", "min_kcal": 200, "time_hint": "antrenmandan 1.5-2 saat önce"},
+                {"name": "5. ÖĞÜN ANTRENMAN SONRASI", "kind": "postworkout", "min_kcal": 200, "time_hint": "antrenmandan hemen sonra, protein ağırlıklı"},
+                {"name": "6. ÖĞÜN AKŞAM YEMEĞİ", "kind": "main", "min_kcal": 450, "time_hint": "yatmadan 2 saat önce"},
+            ]
+        return [
+            {"name": "1. ÖĞÜN KAHVALTI", "kind": "main", "min_kcal": 400, "time_hint": "uyanma+30dk"},
+            {"name": "2. ÖĞÜN ARA ÖĞÜN", "kind": "snack", "min_kcal": 150, "time_hint": "10:00 civarı"},
+            {"name": "3. ÖĞÜN ÖĞLE YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "12:30-14:00"},
+            {"name": "4. ÖĞÜN İKİNDİ ARA", "kind": "snack", "min_kcal": 200, "time_hint": "16:00-17:00"},
+            {"name": "5. ÖĞÜN AKŞAM YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "yatmadan 2 saat önce"},
+            {"name": "6. ÖĞÜN GECE ATIŞTIRMALIĞI", "kind": "snack", "min_kcal": 100, "time_hint": "yatmadan 1 saat önce, hafif"},
+        ]
+    # n == 7
+    if is_workout_day:
+        return [
+            {"name": "1. ÖĞÜN KAHVALTI", "kind": "main", "min_kcal": 400, "time_hint": "uyanma+30dk"},
+            {"name": "2. ÖĞÜN ARA ÖĞÜN", "kind": "snack", "min_kcal": 150, "time_hint": "10:00"},
+            {"name": "3. ÖĞÜN ÖĞLE YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "12:30-14:00"},
+            {"name": "4. ÖĞÜN ANTRENMAN ÖNCESİ ARA", "kind": "preworkout", "min_kcal": 200, "time_hint": "antrenmandan 1.5-2 saat önce"},
+            {"name": "5. ÖĞÜN ANTRENMAN SONRASI", "kind": "postworkout", "min_kcal": 200, "time_hint": "protein ağırlıklı"},
+            {"name": "6. ÖĞÜN AKŞAM YEMEĞİ", "kind": "main", "min_kcal": 450, "time_hint": "yatmadan 2 saat önce"},
+            {"name": "7. ÖĞÜN GECE ATIŞTIRMALIĞI", "kind": "snack", "min_kcal": 100, "time_hint": "yatmadan 1 saat önce"},
+        ]
+    return [
+        {"name": "1. ÖĞÜN KAHVALTI", "kind": "main", "min_kcal": 400, "time_hint": "uyanma+30dk"},
+        {"name": "2. ÖĞÜN ARA ÖĞÜN", "kind": "snack", "min_kcal": 150, "time_hint": "10:00"},
+        {"name": "3. ÖĞÜN ÖĞLE YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "12:30-14:00"},
+        {"name": "4. ÖĞÜN İKİNDİ ARA", "kind": "snack", "min_kcal": 200, "time_hint": "16:00-17:00"},
+        {"name": "5. ÖĞÜN ARA", "kind": "snack", "min_kcal": 150, "time_hint": "18:00"},
+        {"name": "6. ÖĞÜN AKŞAM YEMEĞİ", "kind": "main", "min_kcal": 500, "time_hint": "yatmadan 2 saat önce"},
+        {"name": "7. ÖĞÜN GECE ATIŞTIRMALIĞI", "kind": "snack", "min_kcal": 100, "time_hint": "yatmadan 1 saat önce"},
+    ]
+
+
 def _match_exercise_library(cur, exercise_name: str, muscle_hint: str = ""):
     """Match exercise name to exercise_library, return (id, canonical_name, gif_url).
     Prioritizes: exact match > word-overlap score > ILIKE contains > muscle-hint fallback > universal safe.
@@ -2249,12 +2353,37 @@ async def generate_nutrition_program_v2(
             "additionalProperties": False,
         }
 
-        # 7. Prompt
+        # 7. Per-day meal template (workout vs rest)
         day_names = {"mon": "Pazartesi", "tue": "Salı", "wed": "Çarşamba",
                      "thu": "Perşembe", "fri": "Cuma", "sat": "Cumartesi", "sun": "Pazar"}
-        tr_days = ", ".join(day_names.get(d, d) for d in training_days) if training_days else "—"
+        # Combine payload's training_days + onboarding's preferred_workout_days, normalized
+        workout_days_set = (
+            _normalize_workout_days(training_days)
+            | _normalize_workout_days(onb.get("preferred_workout_days") or [])
+        )
+        tr_days_text = ", ".join(day_names[d] for d in ["mon","tue","wed","thu","fri","sat","sun"] if d in workout_days_set) or "—"
         allergies_text = ", ".join(allergies) if allergies else "yok"
         health_text = ", ".join(health_problems) if health_problems else "yok"
+
+        # Build the per-day skeleton string for the prompt
+        day_template_lines = []
+        for day_key in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]:
+            is_workout = day_key in workout_days_set
+            tag = "antrenman günü" if is_workout else "dinlenme günü"
+            day_template_lines.append(f"\n{day_names[day_key].upper()} ({tag}) — TAM {meal_count} öğün:")
+            for i, m in enumerate(_meal_template_for_day(meal_count, is_workout), start=1):
+                kind_label = {
+                    "main": "ANA YEMEK", "snack": "ARA ÖĞÜN",
+                    "preworkout": "ANTRENMAN ÖNCESİ", "postworkout": "ANTRENMAN SONRASI",
+                }.get(m["kind"], "ÖĞÜN")
+                day_template_lines.append(
+                    f"  {i}. {m['name']}  [{kind_label}, ≥{m['min_kcal']} kcal, {m['time_hint']}]"
+                )
+        day_skeleton = "\n".join(day_template_lines)
+
+        # Daily calorie window (target ± 10%)
+        kcal_min = int(target_calories * 0.90)
+        kcal_max = int(target_calories * 1.10)
 
         prompt = f"""ÖĞRENCİ PROFİLİ
 - İsim: {client_name}
@@ -2266,40 +2395,41 @@ async def generate_nutrition_program_v2(
 - Sağlık durumu: {health_text}
 - Bütçe: {nutrition_budget or "—"}
 
-ÖĞRENCİNİN GÜNLÜK RİTMİ (öğün saatlerini buna göre planla!)
-- Uyanma saati: {wakeup_time}
-- Yatma saati: {sleep_time}
+ÖĞRENCİNİN GÜNLÜK RİTMİ
+- Uyanma: {wakeup_time} | Yatma: {sleep_time}
 - Antrenman saati: {workout_hours or "—"}
-- Antrenman günleri: {tr_days}
+- Antrenman günleri: {tr_days_text}
 
 GÜNLÜK MAKRO HEDEFİ
-- Kalori: {target_calories} kcal | Protein: {target_protein}g | Karb: {target_carbs}g | Yağ: {target_fat}g
+- Kalori: {target_calories} kcal (hedef aralık: {kcal_min}-{kcal_max} kcal)
+- Protein: {target_protein}g | Karb: {target_carbs}g | Yağ: {target_fat}g
 
 KOÇ PARAMETRELERİ
-- Öğün sayısı: TAM {meal_count} öğün/gün (eksik veya fazla YAZMA)
+- Öğün sayısı: TAM {meal_count} öğün/gün
 - Diyet tipi: {diet_type}
 - Supplement dahil: {"evet" if include_supplements else "hayır"}
 - Koç notu: {coach_notes or "—"}
 
 {rag_block}
 
+═══ ZORUNLU GÜNLÜK ÖĞÜN YAPISI ═══
+Her gün için aşağıdaki sıralamayı **birebir** uygula. Öğün isimleri ve sırası DEĞİŞTİRİLEMEZ — sadece besin/miktar seçimi sana ait:
+{day_skeleton}
+
 ═══ KESİN KURALLAR ═══
-1. **TAM {meal_count} ÖĞÜN/GÜN** — bu sayı pazartesi'den pazar'a 7 gün boyunca aynı.
-   Antrenman günlerinde Pre/Post-workout supplement öğünleri **bu sayıya dahil**, ek değil.
-2. **ÖĞÜN SAATLERİ ÖĞRENCİNİN RİTMİNE UYGUN OLMALI**:
-   - 1. öğün uyanma saatinden ({wakeup_time}) ~30 dk sonra
-   - Son öğün yatma saatinden ({sleep_time}) en az 1 saat önce
-   - Öğünler arası ~3 saat
-   - Antrenman saati varsa: 1.5-2 saat öncesi karb-ağırlıklı, sonrası protein-ağırlıklı
-3. **ÇEŞİTLİLİK** — her gün için **farklı** besin kombinasyonları kullan:
-   - Pazartesi tavuk, Salı somon, Çarşamba hindi, Perşembe kıyma...
-   - Pazartesi pilav, Salı bulgur, Çarşamba makarna, Perşembe patates...
-   - 7 gün boyunca **aynı menüyü tekrar etme**
-4. **ÖĞÜN İSİMLERİ** — referans programlardaki gibi: "1. ÖĞÜN KAHVALTI", "2. ÖĞÜN", "ANTRENMAN ÖNCESİ ARA ÖĞÜN", "SPORDAN SONRA", "GECE YATMADAN ÖNCE" gibi açıklayıcı.
-5. Her öğünde 3-5 besin (tek besinli öğün YAZMA — protein + karb + sebze + yağ kombinasyonu)
-6. Besin isimleri SADECE verilen enum'dan (schema kontrol edecek)
-7. Birim enum'undan: g, ml, adet, Porsiyon, Yemek Kaşığı, Çay Kaşığı, Servis, dilim, fincan, bardak
-8. Türk mutfağına uygun yemekler (referans programlardan ilham al)"""
+1. **YAPI**: Yukarıdaki "ZORUNLU GÜNLÜK ÖĞÜN YAPISI" listesi ZORUNLU. Her gün için aynı sırayı uygula. ANA YEMEK öğünleri (Kahvaltı/Öğle/Akşam) atlanmaz.
+2. **ANA YEMEK ZORUNLULUĞU**: Kahvaltı/Öğle/Akşam yemeğinde MUTLAKA gerçek besin (et, balık, tavuk, yumurta, peynir, pirinç, makarna, sebze vb.) olmalı — sadece supplement/atıştırmalık yazma.
+3. **MİNİMUM KALORİ**: Her ana yemek (Kahvaltı/Öğle/Akşam) ≥400 kcal. Ara öğünler 100-300 kcal.
+4. **GÜNLÜK TOPLAM**: Her günün toplamı {kcal_min}-{kcal_max} kcal arasında olmalı (hedefin ±%10'u). Eksik kalırsan miktarları ARTIR (örn 100g pirinç → 150g, 1 yumurta → 2 yumurta).
+5. **ANTRENMAN/DİNLENME AYRIMI**:
+   - Antrenman günleri ({tr_days_text}) → ANTRENMAN ÖNCESİ + (varsa SONRASI) öğünleri zorunlu
+   - Dinlenme günleri → pre/post-workout supplement öğünü YASAK; yerine normal ARA öğün koy
+6. **SUPPLEMENT KULLANIMI**: Whey, BCAA, Creatine, Multivitamin gibi supplementler ana yemeğe **EK** olur, öğünün TAMAMI değil. Tek başına supplement öğünü YASAK.
+7. **SAATLER**: Yukarıdaki time_hint'lere uygun. 1. öğün uyanma+30dk, son öğün yatmadan 1 saat önce. Öğünler arası ~2-3 saat.
+8. **ÇEŞİTLİLİK**: 7 gün boyunca AYNI menüyü tekrar etme. Pazartesi tavuk → Salı somon → Çarşamba hindi → Perşembe kıyma... Karbonhidratlar dönsün (pilav/bulgur/makarna/patates).
+9. **ÖĞÜN İÇERİĞİ**: Her ana yemekte 3-5 besin (protein + karb + sebze + yağ kombinasyonu).
+10. **BESİN İSİMLERİ**: SADECE verilen enum'dan seçilir (schema kontrol eder).
+11. **BİRİM**: g, ml, adet, Porsiyon, Yemek Kaşığı, Çay Kaşığı, Servis, dilim, fincan, bardak."""
 
         # 8. OpenAI call (constrained, structured outputs)
         from openai import AsyncOpenAI as _AsyncOpenAI
