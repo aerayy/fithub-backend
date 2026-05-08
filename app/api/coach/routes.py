@@ -2161,59 +2161,81 @@ async def generate_nutrition_program_v2(
         plan_contents = [fetch_plan_content(db, p["plan_id"]) for p in similar]
         rag_block = format_plans_for_prompt(similar, plan_contents)
 
-        # 5. BeGreens food enum (our DB, source='begreens') — AI ONLY uses these names
+        # 5. BeGreens food enum: top-N by RAG popularity (intersection with our food_items)
+        #    OpenAI structured outputs limit: 1000 enum values total in schema.
+        #    Using $ref keeps enum counted once; cap at 200 to leave headroom.
         cur.execute(
             """
-            SELECT DISTINCT COALESCE(fl.name_tr, fi.name_en) AS name
+            WITH top_rag_foods AS (
+                SELECT LOWER(TRIM(name)) AS name_norm, COUNT(*) AS cnt
+                FROM rag_nutrition_foods
+                WHERE name IS NOT NULL AND TRIM(name) != ''
+                GROUP BY LOWER(TRIM(name))
+                ORDER BY cnt DESC
+                LIMIT 600
+            )
+            SELECT DISTINCT ON (name) COALESCE(fl.name_tr, fi.name_en) AS name, MAX(tr.cnt) AS popularity
             FROM food_items fi
             LEFT JOIN food_localization_tr fl ON fl.food_id = fi.id
+            LEFT JOIN top_rag_foods tr ON LOWER(TRIM(COALESCE(fl.name_tr, fi.name_en))) = tr.name_norm
             WHERE fi.source = 'begreens'
               AND COALESCE(fl.name_tr, fi.name_en) IS NOT NULL
-            ORDER BY name ASC
+            GROUP BY COALESCE(fl.name_tr, fi.name_en)
+            ORDER BY name, popularity DESC NULLS LAST
             """
         )
-        food_names = [r["name"] for r in cur.fetchall() if r["name"]]
+        all_names = [(r["name"], r["popularity"] or 0) for r in cur.fetchall() if r["name"]]
+        # Sort by popularity desc, take top 200
+        all_names.sort(key=lambda x: (-x[1], x[0]))
+        food_names = [n for n, _ in all_names[:200]]
         if not food_names:
             raise HTTPException(status_code=500, detail="Besin veritabanı boş")
 
-        # 6. Build constrained JSON Schema (besin enum + unit enum)
+        # 6. Constrained JSON Schema using $defs + $ref so the food enum is
+        #    counted once (not 7x per day). Strict structured outputs.
         unit_enum = ["g", "ml", "adet", "Porsiyon", "Yemek Kaşığı", "Çay Kaşığı",
                      "Servis", "dilim", "fincan", "bardak"]
-        item_schema = {
-            "type": "object",
-            "properties": {
-                "name_tr": {"type": "string", "enum": food_names},
-                "amount": {"type": "number"},
-                "unit": {"type": "string", "enum": unit_enum},
-            },
-            "required": ["name_tr", "amount", "unit"],
-            "additionalProperties": False,
-        }
-        meal_schema = {
-            "type": "object",
-            "properties": {
-                "type": {"type": "string"},
-                "time": {"type": "string"},
-                "items": {"type": "array", "items": item_schema},
-            },
-            "required": ["type", "time", "items"],
-            "additionalProperties": False,
-        }
-        day_schema = {
-            "type": "object",
-            "properties": {"meals": {"type": "array", "items": meal_schema}},
-            "required": ["meals"],
-            "additionalProperties": False,
-        }
         week_schema = {
             "type": "object",
+            "$defs": {
+                "FoodItem": {
+                    "type": "object",
+                    "properties": {
+                        "name_tr": {"type": "string", "enum": food_names},
+                        "amount": {"type": "number"},
+                        "unit": {"type": "string", "enum": unit_enum},
+                    },
+                    "required": ["name_tr", "amount", "unit"],
+                    "additionalProperties": False,
+                },
+                "Meal": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "time": {"type": "string"},
+                        "items": {"type": "array", "items": {"$ref": "#/$defs/FoodItem"}},
+                    },
+                    "required": ["type", "time", "items"],
+                    "additionalProperties": False,
+                },
+                "Day": {
+                    "type": "object",
+                    "properties": {"meals": {"type": "array", "items": {"$ref": "#/$defs/Meal"}}},
+                    "required": ["meals"],
+                    "additionalProperties": False,
+                },
+            },
             "properties": {
                 "week": {
                     "type": "object",
                     "properties": {
-                        "mon": day_schema, "tue": day_schema, "wed": day_schema,
-                        "thu": day_schema, "fri": day_schema, "sat": day_schema,
-                        "sun": day_schema,
+                        "mon": {"$ref": "#/$defs/Day"},
+                        "tue": {"$ref": "#/$defs/Day"},
+                        "wed": {"$ref": "#/$defs/Day"},
+                        "thu": {"$ref": "#/$defs/Day"},
+                        "fri": {"$ref": "#/$defs/Day"},
+                        "sat": {"$ref": "#/$defs/Day"},
+                        "sun": {"$ref": "#/$defs/Day"},
                     },
                     "required": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
                     "additionalProperties": False,
