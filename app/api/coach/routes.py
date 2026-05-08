@@ -2290,7 +2290,7 @@ Yukarıdaki 3 referans programı **şablon** olarak kullan. Öğrencinin profili
         if not OPENAI_API_KEY:
             raise HTTPException(status_code=500, detail="OpenAI API anahtarı yapılandırılmamış")
 
-        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=90.0, max_retries=1)
+        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=140.0, max_retries=1)
         logger.warning(
             "nutrition_v2: start coach=%s student=%s candidates=%s prompt_chars=%s enum_size=%s",
             coach_id, student_user_id, len(similar), len(prompt), len(food_names),
@@ -2298,7 +2298,7 @@ Yukarıdaki 3 referans programı **şablon** olarak kullan. Öğrencinin profili
 
         async def _do_call():
             return await ai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 messages=[
                     {"role": "system", "content":
                         "Sen Türkiye'de profesyonel bir beslenme koçusun. "
@@ -2315,15 +2315,15 @@ Yukarıdaki 3 referans programı **şablon** olarak kullan. Öğrencinin profili
                     },
                 },
                 temperature=0.4,
-                max_tokens=4000,
+                max_tokens=6000,
             )
 
         _t0 = _time.monotonic()
         try:
-            response = await _asyncio.wait_for(_do_call(), timeout=85.0)
+            response = await _asyncio.wait_for(_do_call(), timeout=130.0)
         except _asyncio.TimeoutError:
             logger.error("nutrition_v2: asyncio_timeout coach=%s student=%s", coach_id, student_user_id)
-            raise HTTPException(status_code=504, detail="AI yanıt vermedi, tekrar deneyin")
+            raise HTTPException(status_code=504, detail="AI 130 saniyede yanıt vermedi, tekrar deneyin")
 
         dur = _time.monotonic() - _t0
         choice = response.choices[0] if response.choices else None
