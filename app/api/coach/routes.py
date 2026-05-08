@@ -2043,6 +2043,429 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
     }
 
 
+# ════════════════════════════════════════════════════════════════════════════
+#  Generator-v2: BeGreens RAG + constrained AI (JSON Schema enum)
+#  - Profile match (age/weight/height/meal_count) -> top 3 koç planı
+#  - Mini AI çağrısı: "bu 3 plan'ı öğrenciye uyarla"
+#  - Output enum-locked: AI sadece DB'mizdeki BeGreens besinlerinden seçer
+#  - Output küçük (4K token), sıfırdan üretim yok -> 5-15 sn yanıt
+# ════════════════════════════════════════════════════════════════════════════
+
+@router.post("/students/{student_user_id}/nutrition-programs/generate-v2")
+async def generate_nutrition_program_v2(
+    student_user_id: int,
+    payload: dict = Body(...),
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    import time as _time
+    import asyncio as _asyncio
+    from app.services.rag_matcher_v2 import (
+        find_similar_nutrition_plans,
+        fetch_plan_content,
+        format_plans_for_prompt,
+    )
+
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        # 1. Verify student is assigned to this coach
+        cur.execute(
+            "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+            (student_user_id, coach_id),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış")
+
+        # 2. Onboarding profile
+        cur.execute(
+            """
+            SELECT co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
+                   co.target_weight_kg, co.experience, co.workout_place,
+                   co.food_allergies, co.health_problems, co.supplements,
+                   co.preferred_workout_days,
+                   COALESCE(co.full_name, u.full_name, u.email) AS client_name
+            FROM client_onboarding co
+            JOIN users u ON u.id = co.user_id
+            WHERE co.user_id = %s
+            ORDER BY co.id DESC LIMIT 1
+            """,
+            (student_user_id,),
+        )
+        onb = cur.fetchone() or {}
+
+        age = int(onb.get("age") or 25)
+        weight = float(onb.get("weight_kg") or 70)
+        height = int(onb.get("height_cm") or 170)
+        gender = onb.get("gender") or "bilinmiyor"
+        goal = onb.get("your_goal") or "genel sağlık"
+        target_weight = float(onb.get("target_weight_kg") or weight)
+        client_name = onb.get("client_name") or "Danışan"
+        experience = onb.get("experience") or ""
+        workout_place = onb.get("workout_place") or []
+        allergies = onb.get("food_allergies") or []
+        health_problems = onb.get("health_problems") or []
+
+        # 3. Form inputs
+        meal_count = int(payload.get("meal_count") or 5)
+        diet_type = payload.get("diet_type") or "standard"
+        training_days = payload.get("training_days") or []
+        include_supplements = bool(payload.get("include_supplements", True))
+        coach_notes = payload.get("coach_notes") or ""
+
+        # Auto-calc macros if coach didn't provide
+        target_calories = payload.get("target_calories")
+        target_protein = payload.get("target_protein")
+        target_carbs = payload.get("target_carbs")
+        target_fat = payload.get("target_fat")
+        if not all([target_calories, target_protein, target_carbs, target_fat]):
+            g = str(gender).lower()
+            if g in ("female", "kadın"):
+                bmr = 10 * weight + 6.25 * height - 5 * age - 161
+            else:
+                bmr = 10 * weight + 6.25 * height - 5 * age + 5
+            tdee = bmr * 1.55
+            gl = str(goal).lower()
+            if "lose" in gl or "weight" in gl or target_weight < weight - 1:
+                target_calories = int(tdee * 0.8)
+            elif "gain" in gl or "muscle" in gl or target_weight > weight + 1:
+                target_calories = int(tdee * 1.15)
+            else:
+                target_calories = int(tdee)
+            target_protein = int(weight * (2.5 if diet_type == "high_protein" else 2.0))
+            if diet_type == "keto":
+                target_carbs = int(target_calories * 0.05 / 4)
+                target_fat = int((target_calories - target_protein * 4 - target_carbs * 4) / 9)
+            elif diet_type == "low_carb":
+                target_carbs = int(target_calories * 0.15 / 4)
+                target_fat = int((target_calories - target_protein * 4 - target_carbs * 4) / 9)
+            else:
+                target_fat = int(target_calories * 0.25 / 9)
+                target_carbs = int((target_calories - target_protein * 4 - target_fat * 9) / 4)
+
+        # 4. RAG: top 3 BeGreens plans for similar profile
+        similar = find_similar_nutrition_plans(
+            db, age=age, weight_kg=weight, height_cm=height,
+            meal_count=meal_count, top_n=3,
+        )
+        if not similar:
+            # Fallback: relax constraints, try again
+            similar = find_similar_nutrition_plans(
+                db, age=age, weight_kg=weight, height_cm=height,
+                meal_count=meal_count, top_n=3,
+            )
+        if not similar:
+            logger.warning("nutrition_v2: no RAG candidates for profile age=%s w=%s h=%s", age, weight, height)
+            raise HTTPException(status_code=503, detail="Benzer profil bulunamadı, lütfen daha sonra deneyin")
+
+        plan_contents = [fetch_plan_content(db, p["plan_id"]) for p in similar]
+        rag_block = format_plans_for_prompt(similar, plan_contents)
+
+        # 5. BeGreens food enum (our DB, source='begreens') — AI ONLY uses these names
+        cur.execute(
+            """
+            SELECT DISTINCT COALESCE(fl.name_tr, fi.name_en) AS name
+            FROM food_items fi
+            LEFT JOIN food_localization_tr fl ON fl.food_id = fi.id
+            WHERE fi.source = 'begreens'
+              AND COALESCE(fl.name_tr, fi.name_en) IS NOT NULL
+            ORDER BY name ASC
+            """
+        )
+        food_names = [r["name"] for r in cur.fetchall() if r["name"]]
+        if not food_names:
+            raise HTTPException(status_code=500, detail="Besin veritabanı boş")
+
+        # 6. Build constrained JSON Schema (besin enum + unit enum)
+        unit_enum = ["g", "ml", "adet", "Porsiyon", "Yemek Kaşığı", "Çay Kaşığı",
+                     "Servis", "dilim", "fincan", "bardak"]
+        item_schema = {
+            "type": "object",
+            "properties": {
+                "name_tr": {"type": "string", "enum": food_names},
+                "amount": {"type": "number"},
+                "unit": {"type": "string", "enum": unit_enum},
+            },
+            "required": ["name_tr", "amount", "unit"],
+            "additionalProperties": False,
+        }
+        meal_schema = {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string"},
+                "time": {"type": "string"},
+                "items": {"type": "array", "items": item_schema},
+            },
+            "required": ["type", "time", "items"],
+            "additionalProperties": False,
+        }
+        day_schema = {
+            "type": "object",
+            "properties": {"meals": {"type": "array", "items": meal_schema}},
+            "required": ["meals"],
+            "additionalProperties": False,
+        }
+        week_schema = {
+            "type": "object",
+            "properties": {
+                "week": {
+                    "type": "object",
+                    "properties": {
+                        "mon": day_schema, "tue": day_schema, "wed": day_schema,
+                        "thu": day_schema, "fri": day_schema, "sat": day_schema,
+                        "sun": day_schema,
+                    },
+                    "required": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                    "additionalProperties": False,
+                }
+            },
+            "required": ["week"],
+            "additionalProperties": False,
+        }
+
+        # 7. Prompt
+        day_names = {"mon": "Pazartesi", "tue": "Salı", "wed": "Çarşamba",
+                     "thu": "Perşembe", "fri": "Cuma", "sat": "Cumartesi", "sun": "Pazar"}
+        tr_days = ", ".join(day_names.get(d, d) for d in training_days) if training_days else "—"
+        allergies_text = ", ".join(allergies) if allergies else "yok"
+        health_text = ", ".join(health_problems) if health_problems else "yok"
+
+        prompt = f"""ÖĞRENCİ PROFİLİ
+- İsim: {client_name}
+- Yaş: {age} | Cinsiyet: {gender} | Kilo: {weight} kg | Boy: {height} cm
+- Hedef: {goal} (hedef kilo: {target_weight} kg)
+- Deneyim: {experience}
+- Antrenman yeri: {workout_place}
+- Alerji: {allergies_text}
+- Sağlık durumu: {health_text}
+
+GÜNLÜK MAKRO HEDEFİ
+- Kalori: {target_calories} kcal | Protein: {target_protein}g | Karb: {target_carbs}g | Yağ: {target_fat}g
+
+KOÇ PARAMETRELERİ
+- Öğün sayısı: {meal_count}
+- Diyet tipi: {diet_type}
+- Antrenman günleri: {tr_days}
+- Supplement dahil: {"evet" if include_supplements else "hayır"}
+- Koç notu: {coach_notes or "—"}
+
+{rag_block}
+
+GÖREVİN
+Yukarıdaki 3 referans programı **şablon** olarak kullan. Öğrencinin profiline ve koç parametrelerine göre 7 GÜNLÜK haftalık beslenme programı oluştur.
+- Öğün isimlerini ve saatlerini referans programlardan al (örn. "1. ÖĞÜN KAHVALTI 08:00")
+- Her gün {meal_count} öğün
+- Antrenman günlerinde sporun öncesi/sonrası ek öğünler ekle (örn. "ANTRENMAN ÖNCESİ ARA ÖĞÜN", "SPORDAN SONRA YAPILACAKLAR")
+- Her öğünde 3-5 besin
+- Besin isimleri SADECE veriyi sağlanan enum'dan seçilebilir (zaten kontrol edilecek)
+- Birim sadece şu enum'dan: g, ml, adet, Porsiyon, Yemek Kaşığı, Çay Kaşığı, Servis, dilim, fincan, bardak
+- Günler arası çeşitlilik sağla
+- Türk mutfağına uygun yemekler (referans programlardan ilham al)"""
+
+        # 8. OpenAI call (constrained, structured outputs)
+        from openai import AsyncOpenAI as _AsyncOpenAI
+
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=500, detail="OpenAI API anahtarı yapılandırılmamış")
+
+        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=90.0, max_retries=1)
+        logger.warning(
+            "nutrition_v2: start coach=%s student=%s candidates=%s prompt_chars=%s enum_size=%s",
+            coach_id, student_user_id, len(similar), len(prompt), len(food_names),
+        )
+
+        async def _do_call():
+            return await ai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content":
+                        "Sen Türkiye'de profesyonel bir beslenme koçusun. "
+                        "Verilen 3 referans programı şablon olarak kullanıp öğrenciye uyarlanmış "
+                        "haftalık beslenme programı yazıyorsun. Sadece JSON döndür."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "weekly_nutrition_plan",
+                        "schema": week_schema,
+                        "strict": True,
+                    },
+                },
+                temperature=0.4,
+                max_tokens=4000,
+            )
+
+        _t0 = _time.monotonic()
+        try:
+            response = await _asyncio.wait_for(_do_call(), timeout=85.0)
+        except _asyncio.TimeoutError:
+            logger.error("nutrition_v2: asyncio_timeout coach=%s student=%s", coach_id, student_user_id)
+            raise HTTPException(status_code=504, detail="AI yanıt vermedi, tekrar deneyin")
+
+        dur = _time.monotonic() - _t0
+        choice = response.choices[0] if response.choices else None
+        finish = getattr(choice, "finish_reason", None) if choice else None
+        raw_content = (choice.message.content if choice and choice.message else None)
+        logger.warning(
+            "nutrition_v2: ai_done duration=%.1fs finish=%s usage=%s content_chars=%s",
+            dur, finish, getattr(response, "usage", None), len(raw_content or ""),
+        )
+
+        if not raw_content:
+            raise HTTPException(status_code=502, detail="AI boş yanıt döndürdü")
+        if finish == "length":
+            raise HTTPException(status_code=502, detail="AI yanıtı kesildi, öğün sayısını azaltıp tekrar deneyin")
+
+        try:
+            result = json.loads(raw_content)
+        except json.JSONDecodeError:
+            logger.exception("nutrition_v2: invalid JSON")
+            raise HTTPException(status_code=502, detail="AI bozuk JSON döndürdü")
+
+        week_data = result.get("week", {}) if isinstance(result, dict) else {}
+        if not week_data:
+            raise HTTPException(status_code=502, detail="AI beklenen formatta yanıt vermedi")
+
+        # 9. Macro lookup from our food_items (BeGreens) using Turkish-aware match
+        cur.execute(
+            """
+            SELECT
+                COALESCE(fl.name_tr, fi.name_en) AS name,
+                fi.serving_unit,
+                fn.calories_kcal AS cal,
+                fn.protein_g AS prot,
+                fn.fat_g AS fat,
+                fn.carbs_g AS carb
+            FROM food_items fi
+            JOIN food_nutrients_100g fn ON fn.food_id = fi.id
+            LEFT JOIN food_localization_tr fl ON fl.food_id = fi.id
+            WHERE fi.source = 'begreens'
+            """
+        )
+        food_lookup: dict = {}
+        for f in cur.fetchall():
+            key = _tr_lower(f["name"] or "")
+            if key:
+                food_lookup[key] = {
+                    "cal": float(f.get("cal") or 0),
+                    "prot": float(f.get("prot") or 0),
+                    "carb": float(f.get("carb") or 0),
+                    "fat": float(f.get("fat") or 0),
+                    "unit": f.get("serving_unit") or "g",
+                }
+
+        hits = misses = 0
+        for day_key, day_data in week_data.items():
+            for meal in day_data.get("meals", []):
+                for item in meal.get("items", []):
+                    name = (item.get("name_tr") or "").strip()
+                    db_food = food_lookup.get(_tr_lower(name))
+                    amount = float(item.get("amount") or 0)
+                    unit = item.get("unit") or "g"
+                    if db_food:
+                        hits += 1
+                        ratio = (amount / 100.0) if unit == "g" else amount
+                        item["grams"] = amount
+                        item["calories"] = round(db_food["cal"] * ratio, 1)
+                        item["protein"] = round(db_food["prot"] * ratio, 1)
+                        item["carbs"] = round(db_food["carb"] * ratio, 1)
+                        item["fat"] = round(db_food["fat"] * ratio, 1)
+                    else:
+                        misses += 1
+                        item["grams"] = amount
+                        item.setdefault("calories", 0)
+                        item.setdefault("protein", 0)
+                        item.setdefault("carbs", 0)
+                        item.setdefault("fat", 0)
+
+        logger.warning("nutrition_v2: enrichment hits=%s misses=%s", hits, misses)
+
+        # 10. Save as draft (is_active=FALSE) — same pattern as v1
+        week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        cur.execute(
+            """
+            SELECT id FROM nutrition_programs
+            WHERE client_user_id = %s AND coach_user_id = %s AND is_active = FALSE
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (student_user_id, coach_id),
+        )
+        existing = cur.fetchone()
+        if existing:
+            program_id = existing["id"]
+            cur.execute("DELETE FROM nutrition_meals WHERE nutrition_program_id = %s", (program_id,))
+            cur.execute(
+                "UPDATE nutrition_programs SET updated_at = NOW(), title = 'AI Beslenme Programı (v2)' WHERE id = %s",
+                (program_id,),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO nutrition_programs (client_user_id, coach_user_id, title, is_active, created_at, updated_at)
+                VALUES (%s, %s, 'AI Beslenme Programı (v2)', FALSE, NOW(), NOW())
+                RETURNING id
+                """,
+                (student_user_id, coach_id),
+            )
+            row = cur.fetchone()
+            program_id = row["id"] if isinstance(row, dict) else row[0]
+
+        order_counter = 0
+        for day_key in week_days:
+            day_data = week_data.get(day_key, {})
+            for idx, meal in enumerate(day_data.get("meals", []) if isinstance(day_data, dict) else [], start=1):
+                order_counter += 1
+                meal_type = f"{day_key}:{idx}. Öğün"
+                items = meal.get("items", [])
+                cur.execute(
+                    """
+                    INSERT INTO nutrition_meals (nutrition_program_id, meal_type, content, order_index, planned_time, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                    """,
+                    (program_id, meal_type, json.dumps(items), order_counter, meal.get("time")),
+                )
+        db.commit()
+
+        # 11. Build response
+        response_week = {}
+        for day_key in week_days:
+            day_data = week_data.get(day_key, {})
+            day_meals = day_data.get("meals", []) if isinstance(day_data, dict) else []
+            response_week[day_key] = [
+                {"type": m.get("type", f"{i}. Öğün"), "time": m.get("time", ""), "items": m.get("items", [])}
+                for i, m in enumerate(day_meals, start=1)
+            ]
+
+        return {
+            "program_id": program_id,
+            "generated_by": "ai_v2",
+            "rag_candidates": [{"plan_id": p["plan_id"], "sim_score": float(p["sim_score"])} for p in similar],
+            "duration_s": round(dur, 2),
+            "enrichment": {"hits": hits, "misses": misses},
+            "week": response_week,
+        }
+
+    except HTTPException:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.exception("nutrition_v2: unexpected error")
+        raise HTTPException(status_code=500, detail="Beslenme programı oluşturulurken hata oluştu")
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
 @router.get("/students/{student_user_id}/nutrition-programs/latest")
 def get_latest_nutrition_program(
     student_user_id: int,
