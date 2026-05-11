@@ -2,11 +2,24 @@
 
 Replaces the old JSON-file-based find_similar_programs. Uses real 13K+ coach plans
 + 23K user profiles imported from BeGreens dump.
+
+Two flavors: nutrition (this module's original) and training (added below).
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 from psycopg2.extras import RealDictCursor
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_html(s: Optional[str]) -> str:
+    """Strip the inline phpMyAdmin/TinyMCE markup that some BeGreens fields contain."""
+    if not s:
+        return ""
+    return _HTML_TAG_RE.sub("", str(s)).strip()
 
 
 def find_similar_nutrition_plans(
@@ -141,3 +154,151 @@ def format_plans_for_prompt(plans: list[dict], plan_contents: list[list[dict]]) 
     lines.append("BU PROGRAMLARIN YAPISINI, ÖĞÜN ZAMANLAMASINI VE BESİN KOMBİNASYONLARINI REFERANS AL.")
     lines.append("Öğrencinin profiline uyarla — birebir kopyalama, koç tarzında yaz.")
     return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Training (workout) RAG
+# ════════════════════════════════════════════════════════════════════════════
+
+def find_similar_training_plans(
+    db,
+    age: int,
+    weight_kg: float,
+    height_cm: int,
+    sessions_per_week: int = 4,
+    sessions_window: int = 1,
+    top_n: int = 3,
+) -> list[dict]:
+    """Top-N BeGreens training plans for profiles close to (age, weight, height).
+    Also matches roughly on session frequency (kaç gün/hafta antrenman)."""
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        age_lo, age_hi = max(15, age - 8), min(80, age + 8)
+        w_lo, w_hi = max(35.0, weight_kg - 15), min(200.0, weight_kg + 15)
+        h_lo, h_hi = max(140, height_cm - 15), min(220, height_cm + 15)
+        # Most BeGreens plans have ~3-6 sessions; widen if no exact match
+        s_lo = max(2, sessions_per_week - sessions_window)
+        s_hi = min(7, sessions_per_week + sessions_window)
+
+        cur.execute(
+            """
+            WITH plan_session_count AS (
+                SELECT tp.id AS plan_id, COUNT(s.id) AS session_count
+                FROM rag_training_plans tp
+                LEFT JOIN rag_training_sessions s ON s.plan_id = tp.id
+                GROUP BY tp.id
+            ),
+            candidates AS (
+                SELECT
+                    tp.id        AS plan_id,
+                    tp.name      AS plan_name,
+                    p.id         AS profile_id,
+                    p.age_int    AS age,
+                    p.weight_kg  AS weight,
+                    p.height_cm  AS height,
+                    psc.session_count,
+                    (abs(p.age_int - %s) * 1.0
+                     + abs(COALESCE(p.weight_kg, %s) - %s) * 1.5
+                     + abs(COALESCE(p.height_cm, %s) - %s) * 0.5) AS sim_score
+                FROM rag_training_plans tp
+                JOIN rag_user_profiles p ON p.id = tp.user_id
+                JOIN plan_session_count psc ON psc.plan_id = tp.id
+                WHERE p.age_int BETWEEN %s AND %s
+                  AND p.weight_kg BETWEEN %s AND %s
+                  AND p.height_cm BETWEEN %s AND %s
+                  AND psc.session_count BETWEEN %s AND %s
+            )
+            SELECT * FROM candidates
+            ORDER BY sim_score ASC, plan_id DESC
+            LIMIT %s;
+            """,
+            (
+                age, weight_kg, weight_kg, height_cm, height_cm,
+                age_lo, age_hi, w_lo, w_hi, h_lo, h_hi,
+                s_lo, s_hi,
+                top_n,
+            ),
+        )
+        return cur.fetchall() or []
+    finally:
+        cur.close()
+
+
+def fetch_training_plan_content(db, plan_id: int) -> list[dict]:
+    """All sessions + their exercises (with superset variants) for one plan."""
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT
+                s.id             AS session_id,
+                s.training_name  AS session_name,
+                s.training_time  AS day_hint,
+                e.id             AS exercise_id,
+                e.move_name      AS move1,
+                e.quantity       AS qty1,
+                e.move2          AS move2,
+                e.quantity2      AS qty2,
+                e.move3          AS move3,
+                e.quantity3      AS qty3
+            FROM rag_training_sessions s
+            LEFT JOIN rag_training_exercises e ON e.training_id = s.id
+            WHERE s.plan_id = %s
+            ORDER BY s.id ASC, e.id ASC;
+            """,
+            (plan_id,),
+        )
+        rows = cur.fetchall() or []
+    finally:
+        cur.close()
+
+    sessions_by_id: dict = {}
+    order: list = []
+    for r in rows:
+        sid = r["session_id"]
+        if sid not in sessions_by_id:
+            sessions_by_id[sid] = {
+                "session_name": _clean_html(r["session_name"]),
+                "day_hint": _clean_html(r["day_hint"]),
+                "exercises": [],
+            }
+            order.append(sid)
+        if r.get("move1"):
+            triplet = []
+            for m, q in (
+                (r.get("move1"), r.get("qty1")),
+                (r.get("move2"), r.get("qty2")),
+                (r.get("move3"), r.get("qty3")),
+            ):
+                m_clean = _clean_html(m)
+                if m_clean:
+                    triplet.append({"name": m_clean, "qty": _clean_html(q)})
+            if triplet:
+                sessions_by_id[sid]["exercises"].append(triplet)
+    return [sessions_by_id[sid] for sid in order]
+
+
+def format_training_plans_for_prompt(plans: list[dict], plan_contents: list[list[dict]]) -> str:
+    """Compact reference text describing 3 RAG training plans for the AI prompt."""
+    lines = ["═══ KOÇUN BENZER PROFİLLERE YAZDIĞI 3 GERÇEK ANTRENMAN PROGRAMI ═══"]
+    for i, (plan, sessions) in enumerate(zip(plans, plan_contents), start=1):
+        lines.append("")
+        lines.append(
+            f"── REFERANS {i} (profil: {plan['age']} yaş, "
+            f"{plan['weight']} kg, {plan['height']} cm; "
+            f"haftada {plan['session_count']} seans; benzerlik={plan['sim_score']:.1f}) ──"
+        )
+        for s in sessions:
+            day = s["day_hint"] or "—"
+            ex_strs = []
+            for triplet in s["exercises"]:
+                # Render superset as "A + B + C (qty)"
+                names = " + ".join(t["name"] for t in triplet)
+                qtys = " / ".join(t["qty"] for t in triplet if t["qty"])
+                ex_strs.append(f"{names}" + (f" ({qtys})" if qtys else ""))
+            lines.append(f"  [{day}] {s['session_name']}: " + " | ".join(ex_strs))
+    lines.append("")
+    lines.append("BU PROGRAMLARIN GÜN-KAS-GRUBU EŞLEŞMESİNİ VE EGZERSİZ SIRALAMASINI REFERANS AL.")
+    lines.append("Öğrencinin profiline uyarla — birebir kopyalama, koç tarzında yaz.")
+    return "\n".join(lines)
+

@@ -1174,6 +1174,509 @@ Sadece JSON döndür:
         raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
+# ════════════════════════════════════════════════════════════════════════════
+#  Workout Generator-v2: BeGreens RAG + constrained AI
+#  - 16K koç antrenman planı + 23K profil RAG'i kullanır
+#  - Profile match -> top 3 plan -> sessions + exercises
+#  - JSON Schema enum: exercise_library (gif_url'lü) top 200, $ref ile counted-once
+#  - Zorunlu split şablonu: num_days'e göre Push/Pull/Legs / Upper-Lower / Body-Part
+#  - DB grounding: exercise_library_id otomatik match (gif görseli için)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _workout_split_template(num_days: int) -> list[dict]:
+    """Türkçe gün etiketleri + ana kas grupları (frekansa göre profesyonel split)."""
+    n = max(1, min(7, int(num_days or 4)))
+    if n == 1:
+        return [{"day_label": "Tüm Vücut", "muscle_groups": ["Göğüs", "Sırt", "Bacak", "Karın"]}]
+    if n == 2:
+        return [
+            {"day_label": "Üst Vücut", "muscle_groups": ["Göğüs", "Sırt", "Omuz", "Kol"]},
+            {"day_label": "Alt Vücut + Karın", "muscle_groups": ["Bacak", "Kalça", "Karın"]},
+        ]
+    if n == 3:
+        return [
+            {"day_label": "Push (İtme): Göğüs - Omuz - Triceps", "muscle_groups": ["Göğüs", "Omuz", "Triceps"]},
+            {"day_label": "Pull (Çekme): Sırt - Biceps", "muscle_groups": ["Sırt", "Biceps", "Trapez"]},
+            {"day_label": "Bacak + Karın", "muscle_groups": ["Quadriceps", "Hamstring", "Kalça", "Karın"]},
+        ]
+    if n == 4:
+        return [
+            {"day_label": "Üst Vücut A (Göğüs - Sırt)", "muscle_groups": ["Göğüs", "Sırt"]},
+            {"day_label": "Alt Vücut A (Bacak Ön)", "muscle_groups": ["Quadriceps", "Kalça"]},
+            {"day_label": "Üst Vücut B (Omuz - Kol)", "muscle_groups": ["Omuz", "Biceps", "Triceps"]},
+            {"day_label": "Alt Vücut B + Karın", "muscle_groups": ["Hamstring", "Baldır", "Karın"]},
+        ]
+    if n == 5:
+        return [
+            {"day_label": "Göğüs", "muscle_groups": ["Göğüs", "Triceps"]},
+            {"day_label": "Sırt", "muscle_groups": ["Sırt", "Biceps", "Trapez"]},
+            {"day_label": "Bacak", "muscle_groups": ["Quadriceps", "Hamstring", "Kalça", "Baldır"]},
+            {"day_label": "Omuz", "muscle_groups": ["Omuz", "Trapez"]},
+            {"day_label": "Kol + Karın", "muscle_groups": ["Biceps", "Triceps", "Ön Kol", "Karın"]},
+        ]
+    if n == 6:
+        return [
+            {"day_label": "Göğüs", "muscle_groups": ["Göğüs"]},
+            {"day_label": "Sırt", "muscle_groups": ["Sırt", "Trapez"]},
+            {"day_label": "Bacak Ön", "muscle_groups": ["Quadriceps", "Kalça"]},
+            {"day_label": "Omuz", "muscle_groups": ["Omuz"]},
+            {"day_label": "Kol", "muscle_groups": ["Biceps", "Triceps", "Ön Kol"]},
+            {"day_label": "Bacak Arka + Karın", "muscle_groups": ["Hamstring", "Baldır", "Karın"]},
+        ]
+    return [
+        {"day_label": "Göğüs", "muscle_groups": ["Göğüs"]},
+        {"day_label": "Sırt", "muscle_groups": ["Sırt"]},
+        {"day_label": "Bacak", "muscle_groups": ["Bacak"]},
+        {"day_label": "Omuz", "muscle_groups": ["Omuz"]},
+        {"day_label": "Kol", "muscle_groups": ["Biceps", "Triceps"]},
+        {"day_label": "Karın + Kardio", "muscle_groups": ["Karın"]},
+        {"day_label": "Aktif Dinlenme / Streching", "muscle_groups": ["Esneklik"]},
+    ]
+
+
+@router.post("/students/{student_user_id}/workout-programs/generate-v2")
+async def generate_workout_program_v2(
+    student_user_id: int,
+    payload: dict = Body(default=None),
+    db=Depends(get_db),
+    current_user=Depends(require_role("coach")),
+):
+    import time as _time
+    import asyncio as _asyncio
+    from app.services.rag_matcher_v2 import (
+        find_similar_training_plans,
+        fetch_training_plan_content,
+        format_training_plans_for_prompt,
+    )
+
+    coach_id = current_user["id"]
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    payload = payload or {}
+    try:
+        # 1. Coach-student auth
+        cur.execute(
+            "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
+            (student_user_id, coach_id),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış")
+
+        # 2. Onboarding
+        cur.execute(
+            """
+            SELECT co.age, co.weight_kg, co.height_cm, co.gender, co.your_goal,
+                   co.target_weight_kg, co.experience, co.how_fit, co.knee_pain,
+                   co.body_part_focus, co.pref_workout_length, co.workout_place,
+                   co.preferred_workout_days, co.preferred_workout_hours,
+                   co.health_problems,
+                   COALESCE(co.full_name, u.full_name, u.email) AS client_name
+            FROM client_onboarding co
+            JOIN users u ON u.id = co.user_id
+            WHERE co.user_id = %s
+            ORDER BY co.id DESC LIMIT 1
+            """,
+            (student_user_id,),
+        )
+        onb = cur.fetchone() or {}
+
+        age = int(onb.get("age") or 25)
+        weight = float(onb.get("weight_kg") or 70)
+        height = int(onb.get("height_cm") or 170)
+        gender = onb.get("gender") or "bilinmiyor"
+        goal = onb.get("your_goal") or "general fitness"
+        experience = onb.get("experience") or "beginner"
+        fitness_level = onb.get("how_fit") or "beginner"
+        knee_pain = onb.get("knee_pain")
+        body_focus = onb.get("body_part_focus") or []
+        workout_length = onb.get("pref_workout_length") or "medium"
+        workout_place = onb.get("workout_place") or []
+        client_name = onb.get("client_name") or "Danışan"
+        health_problems = onb.get("health_problems") or []
+        preferred_days_raw = onb.get("preferred_workout_days") or []
+        # Allow coach to override via payload (optional)
+        if isinstance(payload.get("preferred_days"), list) and payload.get("preferred_days"):
+            preferred_days_raw = payload["preferred_days"]
+
+        workout_days_set = _normalize_workout_days(preferred_days_raw)
+        if not workout_days_set:
+            workout_days_set = {"mon", "wed", "fri"}  # default 3-day full body
+        num_days = len(workout_days_set)
+
+        # 3. RAG: top 3 BeGreens training plans
+        similar = find_similar_training_plans(
+            db, age=age, weight_kg=weight, height_cm=height,
+            sessions_per_week=num_days, sessions_window=1, top_n=3,
+        )
+        if not similar:
+            similar = find_similar_training_plans(
+                db, age=age, weight_kg=weight, height_cm=height,
+                sessions_per_week=num_days, sessions_window=3, top_n=3,
+            )
+        if not similar:
+            logger.warning(
+                "workout_v2: no RAG candidates profile age=%s w=%s h=%s sessions=%s",
+                age, weight, height, num_days,
+            )
+            raise HTTPException(status_code=503, detail="Benzer profil bulunamadı, lütfen daha sonra deneyin")
+
+        plan_contents = [fetch_training_plan_content(db, p["plan_id"]) for p in similar]
+        rag_block = format_training_plans_for_prompt(similar, plan_contents)
+
+        # 4. Exercise enum: gif'i olan exercise_library egzersizleri,
+        #    rag_training_exercises popülerliğine göre sıralı, top 200
+        cur.execute(
+            """
+            WITH top_rag_moves AS (
+                SELECT LOWER(TRIM(move_name)) AS name_norm, COUNT(*) AS cnt
+                FROM rag_training_exercises
+                WHERE move_name IS NOT NULL AND TRIM(move_name) != ''
+                GROUP BY LOWER(TRIM(move_name))
+                ORDER BY cnt DESC
+                LIMIT 800
+            )
+            SELECT el.canonical_name, COALESCE(MAX(tr.cnt), 0) AS popularity
+            FROM exercise_library el
+            LEFT JOIN top_rag_moves tr ON LOWER(TRIM(el.canonical_name)) = tr.name_norm
+            WHERE el.canonical_name IS NOT NULL
+              AND el.gif_url IS NOT NULL
+              AND el.gif_url != ''
+            GROUP BY el.canonical_name
+            ORDER BY popularity DESC NULLS LAST, el.canonical_name ASC
+            """
+        )
+        all_exercises = [(r["canonical_name"], r["popularity"] or 0) for r in cur.fetchall() if r["canonical_name"]]
+        exercise_names = [n for n, _ in all_exercises[:200]]
+        if not exercise_names:
+            raise HTTPException(status_code=500, detail="Egzersiz veritabanı boş")
+
+        # 5. Per-day template (Türkçe split based on num_days)
+        split = _workout_split_template(num_days)
+        # Map split entries to actual workout days (ordered mon..sun)
+        all_week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        ordered_workout_days = [d for d in all_week_days if d in workout_days_set]
+        day_assignments: dict = {}
+        for i, day_key in enumerate(ordered_workout_days):
+            if i < len(split):
+                day_assignments[day_key] = split[i]
+
+        # 6. Constrained JSON Schema
+        rep_pattern_enum = [
+            "3x8", "3x10", "3x12", "3x15", "4x6", "4x8", "4x10", "4x12", "4x15",
+            "5x5", "5x8", "5x10", "5x12", "2x15", "3x20", "3x10-12", "4x8-10",
+            "4x10-12", "3 set 30 saniye", "3 set 45 saniye", "Hata Noktası",
+        ]
+        week_schema = {
+            "type": "object",
+            "$defs": {
+                "Exercise": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "enum": exercise_names},
+                        "sets": {"type": "integer"},
+                        "reps": {"type": "string", "enum": rep_pattern_enum},
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["name", "sets", "reps", "notes"],
+                    "additionalProperties": False,
+                },
+                "Day": {
+                    "type": "object",
+                    "properties": {
+                        "is_rest": {"type": "boolean"},
+                        "session_title": {"type": "string"},
+                        "exercises": {"type": "array", "items": {"$ref": "#/$defs/Exercise"}},
+                    },
+                    "required": ["is_rest", "session_title", "exercises"],
+                    "additionalProperties": False,
+                },
+            },
+            "properties": {
+                "week": {
+                    "type": "object",
+                    "properties": {d: {"$ref": "#/$defs/Day"} for d in all_week_days},
+                    "required": all_week_days,
+                    "additionalProperties": False,
+                }
+            },
+            "required": ["week"],
+            "additionalProperties": False,
+        }
+
+        # 7. Prompt
+        day_names = {"mon": "Pazartesi", "tue": "Salı", "wed": "Çarşamba",
+                     "thu": "Perşembe", "fri": "Cuma", "sat": "Cumartesi", "sun": "Pazar"}
+        split_lines = []
+        for day_key in all_week_days:
+            if day_key in day_assignments:
+                s = day_assignments[day_key]
+                split_lines.append(
+                    f"  {day_names[day_key]} → {s['day_label']}  "
+                    f"[odak: {', '.join(s['muscle_groups'])}]"
+                )
+            else:
+                split_lines.append(f"  {day_names[day_key]} → DİNLENME (is_rest=true, exercises=[])")
+        split_block = "\n".join(split_lines)
+        body_focus_text = ", ".join(body_focus) if body_focus else "—"
+        health_text = ", ".join(health_problems) if health_problems else "yok"
+        place_text = ", ".join(workout_place) if isinstance(workout_place, list) else str(workout_place)
+
+        prompt = f"""ÖĞRENCİ PROFİLİ
+- İsim: {client_name}
+- Yaş: {age} | Cinsiyet: {gender} | Kilo: {weight} kg | Boy: {height} cm
+- Hedef: {goal}
+- Antrenman tecrübesi: {experience}
+- Form seviyesi: {fitness_level}
+- Antrenman yeri: {place_text}
+- Antrenman uzunluğu: {workout_length}
+- Diz problemi: {knee_pain or "yok"}
+- Diğer sağlık problemleri: {health_text}
+- Odak istenen bölgeler: {body_focus_text}
+
+ANTRENMAN GÜNLERİ ({num_days} gün/hafta)
+{split_block}
+
+{rag_block}
+
+═══ ZORUNLU GÜNLÜK YAPISAL KURALLAR ═══
+1. **GÜN-KAS GRUBU EŞLEŞMESİ**: Yukarıdaki tabloya KESİN uy. Her antrenman gününde sadece o günün kas grubuna yönelik egzersizler.
+2. **DİNLENME GÜNLERİ**: is_rest=true, session_title="Dinlenme", exercises=[] (boş array).
+3. **EGZERSİZ SAYISI** her antrenman günü için: 5-8 egzersiz (compound + isolation karışımı).
+4. **SIRALAMA** (her gün):
+   - 1-2 büyük compound (Bench Press, Squat, Deadlift, Pull-Up, Overhead Press gibi)
+   - 2-3 orta zorlukta makine/dumbbell egzersizi
+   - 1-2 isolation/finisher (curl, kickback, fly, calf raise gibi)
+5. **SET/REP** referans programlardaki gibi gerçekçi olmalı. Kullanılabilecek pattern'ler:
+   - Compound: 4x6, 4x8, 5x5
+   - Hipertrofi: 3x10, 3x12, 4x10
+   - Yüksek tekrar: 3x15, 3x20
+   - İzometrik: "3 set 30 saniye" gibi
+6. **EGZERSİZ İSİMLERİ** SADECE verilen enum'dan seçilebilir (schema kontrol eder).
+7. **GÜVENLİK**: Diz problemi varsa squat/lunge gibi diz baskı yapan hareketleri minimize et, alternatif öner. Sağlık problemi varsa ona göre adapte et.
+8. **ÇEŞİTLİLİK**: Aynı egzersizi farklı günlerde tekrar etme (gün-grup eşleşmesi farklıysa OK).
+9. **TÜRKÇE NOTE**: notes alanına Türkçe kısa açıklama yaz (ör. "Form düşmesin", "Negatif kontrollü", "Failure'a kadar git" gibi).
+10. **HAFTA TAMAMI**: 7 gün için de (mon, tue, ..., sun) Day objesi döndür. Antrenman olmayan günlerde is_rest=true."""
+
+        # 8. OpenAI call
+        from openai import AsyncOpenAI as _AsyncOpenAI
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=500, detail="OpenAI API anahtarı yapılandırılmamış")
+
+        ai_client = _AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=140.0, max_retries=1)
+        logger.warning(
+            "workout_v2: start coach=%s student=%s days=%s candidates=%s prompt_chars=%s enum_size=%s",
+            coach_id, student_user_id, num_days, len(similar), len(prompt), len(exercise_names),
+        )
+
+        async def _do_call():
+            return await ai_client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=[
+                    {"role": "system", "content":
+                        "Sen Türkiye'de profesyonel bir spor antrenmanı koçusun. "
+                        "Verilen 3 referans programı şablon olarak kullanıp öğrenciye uyarlanmış "
+                        "haftalık antrenman programı yazıyorsun. Sadece JSON döndür."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "weekly_workout_plan",
+                        "schema": week_schema,
+                        "strict": True,
+                    },
+                },
+                temperature=0.4,
+                max_tokens=6000,
+            )
+
+        _t0 = _time.monotonic()
+        try:
+            response = await _asyncio.wait_for(_do_call(), timeout=130.0)
+        except _asyncio.TimeoutError:
+            logger.error("workout_v2: asyncio_timeout coach=%s student=%s", coach_id, student_user_id)
+            raise HTTPException(status_code=504, detail="AI 130 saniyede yanıt vermedi, tekrar deneyin")
+
+        dur = _time.monotonic() - _t0
+        choice = response.choices[0] if response.choices else None
+        finish = getattr(choice, "finish_reason", None) if choice else None
+        raw_content = (choice.message.content if choice and choice.message else None)
+        logger.warning(
+            "workout_v2: ai_done duration=%.1fs finish=%s usage=%s content_chars=%s",
+            dur, finish, getattr(response, "usage", None), len(raw_content or ""),
+        )
+
+        if not raw_content:
+            raise HTTPException(status_code=502, detail="AI boş yanıt döndürdü")
+        if finish == "length":
+            raise HTTPException(status_code=502, detail="AI yanıtı kesildi, gün sayısını azaltıp tekrar deneyin")
+
+        try:
+            result = json.loads(raw_content)
+        except json.JSONDecodeError:
+            logger.exception("workout_v2: invalid JSON")
+            raise HTTPException(status_code=502, detail="AI bozuk JSON döndürdü")
+
+        week_data = result.get("week", {}) if isinstance(result, dict) else {}
+        if not week_data:
+            raise HTTPException(status_code=502, detail="AI beklenen formatta yanıt vermedi")
+
+        # 9. Save: workout_programs + workout_days + workout_exercises
+        # Reuse existing draft if any
+        cur.execute(
+            """
+            SELECT id FROM workout_programs
+            WHERE client_user_id = %s AND coach_user_id = %s AND is_active = FALSE
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (student_user_id, coach_id),
+        )
+        existing = cur.fetchone()
+        if existing:
+            program_id = existing["id"]
+            cur.execute(
+                """
+                DELETE FROM workout_exercises
+                WHERE workout_day_id IN (SELECT id FROM workout_days WHERE workout_program_id = %s)
+                """,
+                (program_id,),
+            )
+            cur.execute("DELETE FROM workout_days WHERE workout_program_id = %s", (program_id,))
+            cur.execute(
+                "UPDATE workout_programs SET title='AI Antrenman Programı (v2)', updated_at=NOW() WHERE id=%s",
+                (program_id,),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
+                VALUES (%s, %s, 'AI Antrenman Programı (v2)', FALSE)
+                RETURNING id
+                """,
+                (student_user_id, coach_id),
+            )
+            row = cur.fetchone()
+            program_id = row["id"] if isinstance(row, dict) else row[0]
+
+        # Insert days + exercises
+        hits = misses = 0
+        for order_idx, day_key in enumerate(all_week_days, start=1):
+            day_obj = week_data.get(day_key, {}) or {}
+            is_rest = bool(day_obj.get("is_rest")) or day_key not in workout_days_set
+            session_title = day_obj.get("session_title") or (
+                "Dinlenme" if is_rest else day_assignments.get(day_key, {}).get("day_label", "Antrenman")
+            )
+            exercises = [] if is_rest else (day_obj.get("exercises") or [])
+
+            day_payload = {
+                "kcal": "",
+                "coach_note": session_title,
+                "warmup": {"duration_min": "", "items": []},
+                "blocks": [
+                    {
+                        "title": session_title,
+                        "items": [
+                            {
+                                "type": "exercise",
+                                "name": ex.get("name", ""),
+                                "sets": ex.get("sets", 3),
+                                "reps": str(ex.get("reps", "")),
+                                "notes": ex.get("notes", ""),
+                            }
+                            for ex in exercises
+                        ],
+                    }
+                ] if exercises else [],
+            }
+
+            cur.execute(
+                """
+                INSERT INTO workout_days (workout_program_id, day_of_week, order_index, day_payload)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                (program_id, day_key, order_idx, json.dumps(day_payload)),
+            )
+            workout_day_id = cur.fetchone()["id"]
+
+            for ex_order, ex in enumerate(exercises, start=1):
+                name = str(ex.get("name") or "").strip()
+                if not name:
+                    continue
+                # Match canonical_name -> exercise_library_id (for gif_url)
+                matched = _match_exercise_library(cur, name)
+                lib_id = matched["id"] if matched else None
+                resolved_name = matched["canonical_name"] if matched else name
+                if matched:
+                    hits += 1
+                else:
+                    misses += 1
+                try:
+                    sets_db = int(ex.get("sets") or 3)
+                except (TypeError, ValueError):
+                    sets_db = 3
+                cur.execute(
+                    """
+                    INSERT INTO workout_exercises
+                    (workout_day_id, exercise_name, sets, reps, notes, order_index, exercise_library_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        workout_day_id,
+                        resolved_name,
+                        sets_db,
+                        str(ex.get("reps") or ""),
+                        str(ex.get("notes") or ""),
+                        ex_order,
+                        lib_id,
+                    ),
+                )
+
+        db.commit()
+        logger.warning(
+            "workout_v2: saved program_id=%s lib_hits=%s lib_misses=%s coach=%s student=%s",
+            program_id, hits, misses, coach_id, student_user_id,
+        )
+
+        # 10. Response (UI-friendly week)
+        response_week = {}
+        for day_key in all_week_days:
+            d = week_data.get(day_key, {}) or {}
+            response_week[day_key] = {
+                "is_rest": bool(d.get("is_rest")) or day_key not in workout_days_set,
+                "session_title": d.get("session_title", ""),
+                "exercises": d.get("exercises", []) or [],
+            }
+
+        return {
+            "program_id": program_id,
+            "generated_by": "ai_v2",
+            "rag_candidates": [{"plan_id": p["plan_id"], "sim_score": float(p["sim_score"])} for p in similar],
+            "duration_s": round(dur, 2),
+            "library_match": {"hits": hits, "misses": misses},
+            "week": response_week,
+        }
+
+    except HTTPException:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.exception("workout_v2: unexpected error")
+        raise HTTPException(status_code=500, detail="Antrenman programı oluşturulurken hata oluştu")
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
 @router.get("/students/{student_user_id}/workout-programs/latest")
 def get_latest_workout_program(
     student_user_id: int,
