@@ -1361,10 +1361,13 @@ async def generate_workout_program_v2(
                 day_assignments[day_key] = split[i]
 
         # 6. Constrained JSON Schema
+        # Reps: SADECE tekrar sayısı (set sayısı ayrı `sets` field'ında).
+        # Önceki "4x8" formatı sets ile birleşip "4x4x8" gibi yanlış gösterime yol açıyordu.
         rep_pattern_enum = [
-            "3x8", "3x10", "3x12", "3x15", "4x6", "4x8", "4x10", "4x12", "4x15",
-            "5x5", "5x8", "5x10", "5x12", "2x15", "3x20", "3x10-12", "4x8-10",
-            "4x10-12", "3 set 30 saniye", "3 set 45 saniye", "Hata Noktası",
+            "5", "6", "8", "10", "12", "15", "20",
+            "5-8", "6-8", "8-10", "8-12", "10-12", "10-15", "12-15", "15-20",
+            "20-25", "Hata Noktası", "Maksimum",
+            "30 saniye", "45 saniye", "60 saniye",
         ]
         week_schema = {
             "type": "object",
@@ -1439,23 +1442,33 @@ ANTRENMAN GÜNLERİ ({num_days} gün/hafta)
 {rag_block}
 
 ═══ ZORUNLU GÜNLÜK YAPISAL KURALLAR ═══
-1. **GÜN-KAS GRUBU EŞLEŞMESİ**: Yukarıdaki tabloya KESİN uy. Her antrenman gününde sadece o günün kas grubuna yönelik egzersizler.
-2. **DİNLENME GÜNLERİ**: is_rest=true, session_title="Dinlenme", exercises=[] (boş array).
-3. **EGZERSİZ SAYISI** her antrenman günü için: 5-8 egzersiz (compound + isolation karışımı).
-4. **SIRALAMA** (her gün):
-   - 1-2 büyük compound (Bench Press, Squat, Deadlift, Pull-Up, Overhead Press gibi)
-   - 2-3 orta zorlukta makine/dumbbell egzersizi
-   - 1-2 isolation/finisher (curl, kickback, fly, calf raise gibi)
-5. **SET/REP** referans programlardaki gibi gerçekçi olmalı. Kullanılabilecek pattern'ler:
-   - Compound: 4x6, 4x8, 5x5
-   - Hipertrofi: 3x10, 3x12, 4x10
-   - Yüksek tekrar: 3x15, 3x20
-   - İzometrik: "3 set 30 saniye" gibi
-6. **EGZERSİZ İSİMLERİ** SADECE verilen enum'dan seçilebilir (schema kontrol eder).
-7. **GÜVENLİK**: Diz problemi varsa squat/lunge gibi diz baskı yapan hareketleri minimize et, alternatif öner. Sağlık problemi varsa ona göre adapte et.
-8. **ÇEŞİTLİLİK**: Aynı egzersizi farklı günlerde tekrar etme (gün-grup eşleşmesi farklıysa OK).
-9. **TÜRKÇE NOTE**: notes alanına Türkçe kısa açıklama yaz (ör. "Form düşmesin", "Negatif kontrollü", "Failure'a kadar git" gibi).
-10. **HAFTA TAMAMI**: 7 gün için de (mon, tue, ..., sun) Day objesi döndür. Antrenman olmayan günlerde is_rest=true."""
+1. **GÜN-KAS GRUBU EŞLEŞMESİ**: Yukarıdaki split tablosuna KESİN uy. Her antrenman gününde sadece o günün kas grubuna yönelik egzersizler.
+2. **KAS GRUBU DENGESİ — ÇOK ÖNEMLİ**: Bir günde **birden fazla kas grubu** varsa (örn "Göğüs - Sırt"), egzersizler kas grupları arasında **dengeli dağılmalı**:
+   - "Göğüs - Sırt" günü: 2-3 göğüs + 2-3 sırt (tek kas grubuna yığma)
+   - "Omuz - Kol" günü: 2 omuz + 1-2 biceps + 1-2 triceps
+   - "Bacak Ön/Arka": 2 quad + 1-2 hamstring + 1 kalça/baldır
+   - "Push (Göğüs-Omuz-Triceps)": 2 göğüs + 1 omuz + 1 triceps
+   - "Pull (Sırt-Biceps)": 2-3 sırt + 1-2 biceps
+3. **DİNLENME GÜNLERİ**: is_rest=true, session_title="Dinlenme", exercises=[] (boş array).
+4. **EGZERSİZ SAYISI** her antrenman günü için: 5-7 egzersiz.
+5. **SIRALAMA** (her antrenman günü):
+   - 1-2 ağır compound (Bench Press, Squat, Deadlift, Pull-Up, Overhead Press gibi) en başta
+   - 2-3 orta makine/dumbbell varyasyonu
+   - 1-2 isolation/finisher (curl, fly, lateral raise, calf raise gibi) en sonda
+6. **SET ve REPS AYRI**:
+   - `sets`: integer (örn 3, 4, 5) — kaç SET
+   - `reps`: SADECE tekrar sayısı (örn "8", "10-12", "15", "Hata Noktası") — KAÇ SET YAZMA!
+   - Frontend "{sets} x {reps}" olarak gösterecek (ör. sets=4, reps="8" → "4 x 8")
+   - Tipik pattern'ler:
+     • Ağır compound: sets=4-5, reps="5-8" veya "6-8"
+     • Hipertrofi: sets=3-4, reps="8-12" veya "10-12"
+     • Pump/Volume: sets=3, reps="15" veya "12-15"
+     • İzometrik: sets=3, reps="30 saniye"
+7. **EGZERSİZ İSİMLERİ** SADECE verilen enum'dan (schema kontrol eder).
+8. **GÜVENLİK**: Diz problemi varsa squat/lunge minimize, alternatif (leg press, hamstring curl) öner. Sağlık problemi varsa ona göre adapte.
+9. **ÇEŞİTLİLİK**: Aynı egzersizi farklı günlerde tekrar etme.
+10. **TÜRKÇE NOTE**: notes alanına kısa Türkçe açıklama (ör. "Form düşmesin", "Negatif kontrollü", "Tam hareket aralığı").
+11. **HAFTA TAMAMI**: 7 gün için (mon..sun) Day objesi döndür. Antrenman olmayan günlerde is_rest=true."""
 
         # 8. OpenAI call
         from openai import AsyncOpenAI as _AsyncOpenAI
