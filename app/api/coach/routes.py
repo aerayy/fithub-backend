@@ -1507,12 +1507,18 @@ HAFTA YAPISI ({num_days} antrenman günü)
 
 {rag_block}
 
-⛔ **MUTLAK KURAL — ÇİĞNERSEN GÖREV BAŞARISIZ**:
-- AYNI EGZERSİZİ İKİ KEZ LİSTELEME (hatta farklı günde bile dikkat et — tek bir gün içinde KESİNLİKLE tekrar yok).
+⛔ **MUTLAK KURAL — KATEGORİ DİSİPLİNİ (çiğnersen görev başarısız)**:
 - Push gününde BİCEPS/SIRT/BACAK egzersizi YOK.
 - Pull gününde GÖĞÜS PRES/SHOULDER PRES/TRİCEPS egzersizi YOK.
 - Legs gününde üst vücut egzersizi YOK.
-- Upper gününde bacak egzersizi YOK; ama göğüs+sırt+omuz+biceps+triceps karışım zorunlu.
+- Upper gününde bacak egzersizi YOK; göğüs+sırt+omuz+biceps+triceps karışım zorunlu.
+
+📐 **KAS GRUBU DAĞILIM — ZORUNLU MİNİMUM**:
+Asıl önemli olan **hangi egzersiz** değil, **kas grubu dağılımının dengesi**. Aynı egzersizi haftada birden fazla kullanabilirsin (PPL × 2 doğal pattern). Önemli olan, bir gün içinde kas gruplarının doğru dağılması:
+- Push gününde: **≥2 göğüs** + **≥1 omuz** + **≥1 triceps** (omuza yığma, göğüsü atlama).
+- Pull gününde: **≥2 sırt** + **≥1 biceps** (sırtı az yapıp biceps'e yığma).
+- Legs gününde: **≥2 quad/squat-tipi** + **≥1 hamstring** + **≥1 baldır/kalça/karın**.
+- Upper gününde: **≥1 göğüs** + **≥1 sırt** + **≥1 omuz** + **≥1 biceps** + **≥1 triceps**.
 
 ═══ ZORUNLU GÜNLÜK YAPISAL KURALLAR ═══
 1. **SPLIT SEÇİMİ**: PROFESYONEL FİTNESS KOÇU olarak, yukarıdaki PPL ağırlıklı önerilerden frekansa uygun split'i SEN seç ve uygula. Antrenman günlerinin sırasına göre Push/Pull/Legs döngüsünü oluştur. Session_title'ı Türkçe yaz (ör. "Push: Göğüs - Omuz - Triceps", "Pull: Sırt - Biceps", "Legs: Bacak + Karın", "Upper: Tüm Vücut Karma").
@@ -1539,7 +1545,7 @@ HAFTA YAPISI ({num_days} antrenman günü)
      • İzometrik: sets=3, reps="30 saniye"
 7. **EGZERSİZ İSİMLERİ** SADECE verilen enum'dan (schema kontrol eder).
 8. **GÜVENLİK**: Diz problemi varsa squat/lunge minimize, alternatif (leg press, hamstring curl) öner. Sağlık problemi varsa ona göre adapte.
-9. **ÇEŞİTLİLİK**: Aynı egzersizi farklı günlerde tekrar etme.
+9. **ÇEŞİTLİLİK**: Aynı egzersizi farklı günlerde tekrar etmek SERBEST (PPL × 2 gibi). Sıkıntı egzersizin tekrarı değil, **bir gün içindeki kas grubu dağılımının dengeli olmasıdır** (kural 2'ye bak).
 10. **TÜRKÇE NOTE**: notes alanına kısa Türkçe açıklama (ör. "Form düşmesin", "Negatif kontrollü", "Tam hareket aralığı").
 11. **HAFTA TAMAMI**: 7 gün için (mon..sun) Day objesi döndür. Antrenman olmayan günlerde is_rest=true."""
 
@@ -1607,9 +1613,11 @@ HAFTA YAPISI ({num_days} antrenman günü)
         if not week_data:
             raise HTTPException(status_code=502, detail="AI beklenen formatta yanıt vermedi")
 
-        # 8b. Post-processing: filter out cross-category leaks + duplicates per day.
-        # AI sometimes ignores prompt constraints; backend enforces hard rules here.
-        post_filter_stats = {"removed_dupes": 0, "removed_cross_cat": 0, "violations": []}
+        # 8b. Post-processing: SADECE cross-category leak'leri filtrele.
+        # Aynı egzersizin tekrarı (gün içi veya hafta içi) sorun değil — PPL × 2
+        # mantıksal olarak aynı egzersizi farklı günlerde kullanır. Önemli olan,
+        # bir gün içinde yanlış kategoriden egzersiz olmaması (Push'ta biceps vb.).
+        post_filter_stats = {"removed_cross_cat": 0, "violations": []}
         for day_key, day_obj in (week_data.items() if isinstance(week_data, dict) else []):
             if not isinstance(day_obj, dict):
                 continue
@@ -1622,30 +1630,22 @@ HAFTA YAPISI ({num_days} antrenman günü)
             split_type = _infer_split_from_title(day_obj.get("session_title", ""))
             allowed_cats = _SPLIT_CATEGORIES.get(split_type, _SPLIT_CATEGORIES["fullbody"])
 
-            seen_names: set[str] = set()
             kept: list = []
             for ex in exercises:
                 name = (ex.get("name") or "").strip()
                 if not name:
-                    continue
-                key = _tr_lower(name)
-                if key in seen_names:
-                    post_filter_stats["removed_dupes"] += 1
-                    post_filter_stats["violations"].append(f"{day_key}/dupe:{name}")
                     continue
                 cat = _exercise_category(name)
                 if cat != "other" and cat not in allowed_cats:
                     post_filter_stats["removed_cross_cat"] += 1
                     post_filter_stats["violations"].append(f"{day_key}/cross:{name}({cat}∉{split_type})")
                     continue
-                seen_names.add(key)
                 kept.append(ex)
             day_obj["exercises"] = kept
 
-        if post_filter_stats["removed_dupes"] or post_filter_stats["removed_cross_cat"]:
+        if post_filter_stats["removed_cross_cat"]:
             logger.warning(
-                "workout_v2: post_filter removed dupes=%s cross_cat=%s details=%s",
-                post_filter_stats["removed_dupes"],
+                "workout_v2: post_filter removed cross_cat=%s details=%s",
                 post_filter_stats["removed_cross_cat"],
                 post_filter_stats["violations"][:10],
             )
