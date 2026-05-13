@@ -1413,14 +1413,15 @@ async def generate_workout_program_v2(
         # PPL bias guide — AI experience-based split selection
         ppl_guide = """SPLIT ÖNERİLERİ (frekansa göre PPL ağırlıklı):
 - Haftada 3 gün → Push / Pull / Legs (klasik PPL)
-- Haftada 4 gün → Push / Pull / Legs / Upper (veya Full Body)
+- Haftada 4 gün → Push / Pull / Legs / Upper (4. gün Full Body veya Göğüs+Sırt karma; Push'u TEKRARLAMA)
 - Haftada 5 gün → Push / Pull / Legs / Upper / Lower (veya PPL + Arms + Abs)
 - Haftada 6 gün → PPL × 2 (Push / Pull / Legs / Push / Pull / Legs)
 - Haftada 7 gün → PPL × 2 + Aktif Dinlenme (mobility/cardio)
 
-Push günü → Göğüs + Omuz + Triceps (itme hareketleri)
-Pull günü → Sırt + Biceps + Trapez (çekme hareketleri)
-Legs günü → Quadriceps + Hamstring + Kalça + Baldır + Karın"""
+Push günü → SADECE: Göğüs + Omuz + Triceps (itme). Biceps/Sırt/Bacak YASAK.
+Pull günü → SADECE: Sırt + Biceps + Trapez + Arka Delt (çekme). Göğüs/Omuz Pres/Triceps/Bacak YASAK.
+Legs günü → SADECE: Quadriceps + Hamstring + Kalça + Baldır + Karın. Üst vücut YASAK.
+Upper günü (4 gün setupinde) → Göğüs + Sırt + Omuz + Kol karışık (Full Body-like)"""
 
         body_focus_text = ", ".join(body_focus) if body_focus else "—"
         health_text = ", ".join(health_problems) if health_problems else "yok"
@@ -1447,7 +1448,12 @@ HAFTA YAPISI ({num_days} antrenman günü)
 
 ═══ ZORUNLU GÜNLÜK YAPISAL KURALLAR ═══
 1. **SPLIT SEÇİMİ**: PROFESYONEL FİTNESS KOÇU olarak, yukarıdaki PPL ağırlıklı önerilerden frekansa uygun split'i SEN seç ve uygula. Antrenman günlerinin sırasına göre Push/Pull/Legs döngüsünü oluştur. Session_title'ı Türkçe yaz (ör. "Push: Göğüs - Omuz - Triceps", "Pull: Sırt - Biceps", "Legs: Bacak + Karın").
-2. **KAS GRUBU DENGESİ**: Bir Push gününde 2 göğüs + 1 omuz + 1 triceps + 1 ek; Pull'da 2-3 sırt + 1-2 biceps; Legs'te 2 quad + 1 hamstring + 1 kalça + 1 baldır/karın gibi DENGELİ dağılım. Tek kas grubuna yığma.
+2. **KAS GRUBU DENGESİ — ZORUNLU MİNİMUM**:
+   - Push günü: EN AZ **2 göğüs** + EN AZ **1 omuz** + EN AZ **1 triceps**. Omuza yığma, göğüsü atlama.
+   - Pull günü: EN AZ **2-3 sırt** + EN AZ **1 biceps**. Trapez/Arka Delt opsiyonel ek.
+   - Legs günü: EN AZ **2 quad** + EN AZ **1 hamstring** + EN AZ **1 kalça/baldır**. Karın opsiyonel.
+   - Upper günü (4 gün setupinde): EN AZ **1 göğüs + 1 sırt + 1 omuz + 1 kol** karışım.
+   - YASAK KARIŞTIRMA: Push gününde biceps egzersizi YOK. Pull gününde göğüs pres/triceps YOK.
 3. **DİNLENME GÜNLERİ**: is_rest=true, session_title="Dinlenme", exercises=[] (boş array).
 4. **EGZERSİZ SAYISI** her antrenman günü için: 5-7 egzersiz.
 5. **SIRALAMA** (her antrenman günü):
