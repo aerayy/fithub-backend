@@ -1184,6 +1184,67 @@ Sadece JSON döndür:
 # ════════════════════════════════════════════════════════════════════════════
 
 
+def _exercise_category(name: str) -> str:
+    """Coarse muscle-group category from canonical_name. Used both for AI prompt
+    hints and for backend post-processing (filtering out cross-category leaks)."""
+    s = (name or "").lower()
+    # legs (most specific keywords first)
+    if any(k in s for k in ("squat", "lunge", "leg press", "leg extension",
+                            "leg curl", "hip thrust", "glute", "calf",
+                            "step up", "step-up", "bulgarian", "romanian deadlift")):
+        return "legs"
+    if any(k in s for k in ("crunch", "plank", "ab wheel", "russian twist",
+                            "sit up", "sit-up", "leg raise", "knee raise",
+                            "mountain climber", "hollow", "side bend")):
+        return "core"
+    if any(k in s for k in ("row", "pull up", "pull-up", "chin up", "chin-up",
+                            "pulldown", "lat ", "back extension", "deadlift",
+                            "good morning", "shrug", "face pull")):
+        return "back"
+    if "curl" in s and "leg curl" not in s:
+        return "biceps"
+    if any(k in s for k in ("triceps", "tricep ", "tricep-", "skull crusher",
+                            "pushdown", "kickback", "diamond push", "close grip bench")):
+        return "triceps"
+    if any(k in s for k in ("bench press", "fly", "chest", "push up", "push-up",
+                            " dip ", "dip (", "pullover")):
+        return "chest"
+    if any(k in s for k in ("shoulder press", "overhead press", "lateral raise",
+                            "front raise", "rear delt", "upright row",
+                            "arnold press", " ohp")):
+        return "shoulder"
+    return "other"
+
+
+# Allowed categories per split type
+_SPLIT_CATEGORIES = {
+    "push": {"chest", "shoulder", "triceps"},
+    "pull": {"back", "biceps"},
+    "legs": {"legs", "core"},
+    "upper": {"chest", "shoulder", "triceps", "back", "biceps"},
+    "lower": {"legs", "core"},
+    "fullbody": {"chest", "shoulder", "triceps", "back", "biceps", "legs", "core"},
+}
+
+
+def _infer_split_from_title(session_title: str) -> str:
+    """Guess which split type the AI used from its Türkçe session_title."""
+    t = (session_title or "").lower()
+    if "push" in t or "itme" in t or ("göğüs" in t and "omuz" in t):
+        return "push"
+    if "pull" in t or "çekme" in t or ("sırt" in t and "biceps" in t):
+        return "pull"
+    if "leg" in t or "bacak" in t:
+        return "legs"
+    if "upper" in t or "üst vücut" in t:
+        return "upper"
+    if "lower" in t or "alt vücut" in t:
+        return "lower"
+    if "full" in t or "tüm vücut" in t:
+        return "fullbody"
+    return "fullbody"  # default permissive
+
+
 def _workout_split_template(num_days: int) -> list[dict]:
     """Türkçe gün etiketleri + ana kas grupları (frekansa göre profesyonel split)."""
     n = max(1, min(7, int(num_days or 4)))
@@ -1446,8 +1507,15 @@ HAFTA YAPISI ({num_days} antrenman günü)
 
 {rag_block}
 
+⛔ **MUTLAK KURAL — ÇİĞNERSEN GÖREV BAŞARISIZ**:
+- AYNI EGZERSİZİ İKİ KEZ LİSTELEME (hatta farklı günde bile dikkat et — tek bir gün içinde KESİNLİKLE tekrar yok).
+- Push gününde BİCEPS/SIRT/BACAK egzersizi YOK.
+- Pull gününde GÖĞÜS PRES/SHOULDER PRES/TRİCEPS egzersizi YOK.
+- Legs gününde üst vücut egzersizi YOK.
+- Upper gününde bacak egzersizi YOK; ama göğüs+sırt+omuz+biceps+triceps karışım zorunlu.
+
 ═══ ZORUNLU GÜNLÜK YAPISAL KURALLAR ═══
-1. **SPLIT SEÇİMİ**: PROFESYONEL FİTNESS KOÇU olarak, yukarıdaki PPL ağırlıklı önerilerden frekansa uygun split'i SEN seç ve uygula. Antrenman günlerinin sırasına göre Push/Pull/Legs döngüsünü oluştur. Session_title'ı Türkçe yaz (ör. "Push: Göğüs - Omuz - Triceps", "Pull: Sırt - Biceps", "Legs: Bacak + Karın").
+1. **SPLIT SEÇİMİ**: PROFESYONEL FİTNESS KOÇU olarak, yukarıdaki PPL ağırlıklı önerilerden frekansa uygun split'i SEN seç ve uygula. Antrenman günlerinin sırasına göre Push/Pull/Legs döngüsünü oluştur. Session_title'ı Türkçe yaz (ör. "Push: Göğüs - Omuz - Triceps", "Pull: Sırt - Biceps", "Legs: Bacak + Karın", "Upper: Tüm Vücut Karma").
 2. **KAS GRUBU DENGESİ — ZORUNLU MİNİMUM**:
    - Push günü: EN AZ **2 göğüs** + EN AZ **1 omuz** + EN AZ **1 triceps**. Omuza yığma, göğüsü atlama.
    - Pull günü: EN AZ **2-3 sırt** + EN AZ **1 biceps**. Trapez/Arka Delt opsiyonel ek.
@@ -1538,6 +1606,49 @@ HAFTA YAPISI ({num_days} antrenman günü)
         week_data = result.get("week", {}) if isinstance(result, dict) else {}
         if not week_data:
             raise HTTPException(status_code=502, detail="AI beklenen formatta yanıt vermedi")
+
+        # 8b. Post-processing: filter out cross-category leaks + duplicates per day.
+        # AI sometimes ignores prompt constraints; backend enforces hard rules here.
+        post_filter_stats = {"removed_dupes": 0, "removed_cross_cat": 0, "violations": []}
+        for day_key, day_obj in (week_data.items() if isinstance(week_data, dict) else []):
+            if not isinstance(day_obj, dict):
+                continue
+            if day_obj.get("is_rest"):
+                day_obj["exercises"] = []
+                continue
+            exercises = day_obj.get("exercises") or []
+            if not exercises:
+                continue
+            split_type = _infer_split_from_title(day_obj.get("session_title", ""))
+            allowed_cats = _SPLIT_CATEGORIES.get(split_type, _SPLIT_CATEGORIES["fullbody"])
+
+            seen_names: set[str] = set()
+            kept: list = []
+            for ex in exercises:
+                name = (ex.get("name") or "").strip()
+                if not name:
+                    continue
+                key = _tr_lower(name)
+                if key in seen_names:
+                    post_filter_stats["removed_dupes"] += 1
+                    post_filter_stats["violations"].append(f"{day_key}/dupe:{name}")
+                    continue
+                cat = _exercise_category(name)
+                if cat != "other" and cat not in allowed_cats:
+                    post_filter_stats["removed_cross_cat"] += 1
+                    post_filter_stats["violations"].append(f"{day_key}/cross:{name}({cat}∉{split_type})")
+                    continue
+                seen_names.add(key)
+                kept.append(ex)
+            day_obj["exercises"] = kept
+
+        if post_filter_stats["removed_dupes"] or post_filter_stats["removed_cross_cat"]:
+            logger.warning(
+                "workout_v2: post_filter removed dupes=%s cross_cat=%s details=%s",
+                post_filter_stats["removed_dupes"],
+                post_filter_stats["removed_cross_cat"],
+                post_filter_stats["violations"][:10],
+            )
 
         # 9. Save: workout_programs + workout_days + workout_exercises
         # Reuse existing draft if any
@@ -1672,6 +1783,7 @@ HAFTA YAPISI ({num_days} antrenman günü)
             "rag_candidates": [{"plan_id": p["plan_id"], "sim_score": float(p["sim_score"])} for p in similar],
             "duration_s": round(dur, 2),
             "library_match": {"hits": hits, "misses": misses},
+            "post_filter": post_filter_stats,
             "week": response_week,
         }
 
