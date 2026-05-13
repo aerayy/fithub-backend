@@ -1350,15 +1350,8 @@ async def generate_workout_program_v2(
         if not exercise_names:
             raise HTTPException(status_code=500, detail="Egzersiz veritabanı boş")
 
-        # 5. Per-day template (Türkçe split based on num_days)
-        split = _workout_split_template(num_days)
-        # Map split entries to actual workout days (ordered mon..sun)
+        # 5. Day map (workout vs rest). Split'i AI seçecek (PPL bias prompt'ta)
         all_week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-        ordered_workout_days = [d for d in all_week_days if d in workout_days_set]
-        day_assignments: dict = {}
-        for i, day_key in enumerate(ordered_workout_days):
-            if i < len(split):
-                day_assignments[day_key] = split[i]
 
         # 6. Constrained JSON Schema
         # Reps: SADECE tekrar sayısı (set sayısı ayrı `sets` field'ında).
@@ -1409,17 +1402,26 @@ async def generate_workout_program_v2(
         # 7. Prompt
         day_names = {"mon": "Pazartesi", "tue": "Salı", "wed": "Çarşamba",
                      "thu": "Perşembe", "fri": "Cuma", "sat": "Cumartesi", "sun": "Pazar"}
-        split_lines = []
+        day_status_lines = []
         for day_key in all_week_days:
-            if day_key in day_assignments:
-                s = day_assignments[day_key]
-                split_lines.append(
-                    f"  {day_names[day_key]} → {s['day_label']}  "
-                    f"[odak: {', '.join(s['muscle_groups'])}]"
-                )
+            if day_key in workout_days_set:
+                day_status_lines.append(f"  {day_names[day_key]} → ANTRENMAN GÜNÜ (session_title sen belirle, exercises listesi doldur)")
             else:
-                split_lines.append(f"  {day_names[day_key]} → DİNLENME (is_rest=true, exercises=[])")
-        split_block = "\n".join(split_lines)
+                day_status_lines.append(f"  {day_names[day_key]} → DİNLENME GÜNÜ (is_rest=true, session_title=\"Dinlenme\", exercises=[])")
+        day_status_block = "\n".join(day_status_lines)
+
+        # PPL bias guide — AI experience-based split selection
+        ppl_guide = """SPLIT ÖNERİLERİ (frekansa göre PPL ağırlıklı):
+- Haftada 3 gün → Push / Pull / Legs (klasik PPL)
+- Haftada 4 gün → Push / Pull / Legs / Upper (veya Full Body)
+- Haftada 5 gün → Push / Pull / Legs / Upper / Lower (veya PPL + Arms + Abs)
+- Haftada 6 gün → PPL × 2 (Push / Pull / Legs / Push / Pull / Legs)
+- Haftada 7 gün → PPL × 2 + Aktif Dinlenme (mobility/cardio)
+
+Push günü → Göğüs + Omuz + Triceps (itme hareketleri)
+Pull günü → Sırt + Biceps + Trapez (çekme hareketleri)
+Legs günü → Quadriceps + Hamstring + Kalça + Baldır + Karın"""
+
         body_focus_text = ", ".join(body_focus) if body_focus else "—"
         health_text = ", ".join(health_problems) if health_problems else "yok"
         place_text = ", ".join(workout_place) if isinstance(workout_place, list) else str(workout_place)
@@ -1436,19 +1438,16 @@ async def generate_workout_program_v2(
 - Diğer sağlık problemleri: {health_text}
 - Odak istenen bölgeler: {body_focus_text}
 
-ANTRENMAN GÜNLERİ ({num_days} gün/hafta)
-{split_block}
+HAFTA YAPISI ({num_days} antrenman günü)
+{day_status_block}
+
+{ppl_guide}
 
 {rag_block}
 
 ═══ ZORUNLU GÜNLÜK YAPISAL KURALLAR ═══
-1. **GÜN-KAS GRUBU EŞLEŞMESİ**: Yukarıdaki split tablosuna KESİN uy. Her antrenman gününde sadece o günün kas grubuna yönelik egzersizler.
-2. **KAS GRUBU DENGESİ — ÇOK ÖNEMLİ**: Bir günde **birden fazla kas grubu** varsa (örn "Göğüs - Sırt"), egzersizler kas grupları arasında **dengeli dağılmalı**:
-   - "Göğüs - Sırt" günü: 2-3 göğüs + 2-3 sırt (tek kas grubuna yığma)
-   - "Omuz - Kol" günü: 2 omuz + 1-2 biceps + 1-2 triceps
-   - "Bacak Ön/Arka": 2 quad + 1-2 hamstring + 1 kalça/baldır
-   - "Push (Göğüs-Omuz-Triceps)": 2 göğüs + 1 omuz + 1 triceps
-   - "Pull (Sırt-Biceps)": 2-3 sırt + 1-2 biceps
+1. **SPLIT SEÇİMİ**: PROFESYONEL FİTNESS KOÇU olarak, yukarıdaki PPL ağırlıklı önerilerden frekansa uygun split'i SEN seç ve uygula. Antrenman günlerinin sırasına göre Push/Pull/Legs döngüsünü oluştur. Session_title'ı Türkçe yaz (ör. "Push: Göğüs - Omuz - Triceps", "Pull: Sırt - Biceps", "Legs: Bacak + Karın").
+2. **KAS GRUBU DENGESİ**: Bir Push gününde 2 göğüs + 1 omuz + 1 triceps + 1 ek; Pull'da 2-3 sırt + 1-2 biceps; Legs'te 2 quad + 1 hamstring + 1 kalça + 1 baldır/karın gibi DENGELİ dağılım. Tek kas grubuna yığma.
 3. **DİNLENME GÜNLERİ**: is_rest=true, session_title="Dinlenme", exercises=[] (boş array).
 4. **EGZERSİZ SAYISI** her antrenman günü için: 5-7 egzersiz.
 5. **SIRALAMA** (her antrenman günü):
