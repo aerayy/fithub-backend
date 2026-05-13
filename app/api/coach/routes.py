@@ -1457,7 +1457,7 @@ HAFTA YAPISI ({num_days} antrenman günü)
 6. **SET ve REPS AYRI**:
    - `sets`: integer (örn 3, 4, 5) — kaç SET
    - `reps`: SADECE tekrar sayısı (örn "8", "10-12", "15", "Hata Noktası") — KAÇ SET YAZMA!
-   - Frontend "{sets} x {reps}" olarak gösterecek (ör. sets=4, reps="8" → "4 x 8")
+   - Frontend "{{sets}} x {{reps}}" olarak gösterecek (ör. sets=4, reps="8" → "4 x 8")
    - Tipik pattern'ler:
      • Ağır compound: sets=4-5, reps="5-8" veya "6-8"
      • Hipertrofi: sets=3-4, reps="8-12" veya "10-12"
