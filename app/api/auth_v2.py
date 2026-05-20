@@ -494,6 +494,26 @@ def change_password(
     return {"ok": True, "message": "Şifreniz başarıyla değiştirildi"}
 
 
+# ─── Health Disclaimer Acceptance (Apple Guideline 1.4.1) ───
+
+@router.post("/accept-health-disclaimer")
+def accept_health_disclaimer(
+    current_user=Depends(require_role("client")),
+    db=Depends(get_db),
+):
+    """Kullanıcı in-app sağlık uyarısı modal'ında "Kabul Et" tıklayınca çağrılır.
+    accepted_health_disclaimer_at timestamp'i set edilir (idempotent — zaten
+    set ise update edilmez)."""
+    cur = db.cursor()
+    cur.execute(
+        """UPDATE users SET accepted_health_disclaimer_at = NOW()
+           WHERE id = %s AND accepted_health_disclaimer_at IS NULL""",
+        (current_user["id"],),
+    )
+    db.commit()
+    return {"ok": True}
+
+
 # ─── Account Deletion (Apple Guideline 5.1.1(v) + KVKK) ───
 
 @router.delete("/me")
