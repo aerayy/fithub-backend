@@ -1,18 +1,35 @@
 # app/api/auth.py
 import logging
 import os
-from fastapi import APIRouter, HTTPException, Depends
+import time
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, Body
 import bcrypt
 from fastapi.security import OAuth2PasswordRequestForm
 import psycopg2
+import requests as _http
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+from jose import jwt as jose_jwt
+from jose.exceptions import JWTError, ExpiredSignatureError
 
 from app.core.database import get_db
 from app.core.security import create_token
 from app.schemas.auth import SignUpRequest, LoginRequest, GoogleAuthRequest
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+
+# Apple Sign-In configuration
+# Bundle ID (iOS app's identifier) — required for audience check.
+# Comma-separated list desteklenir (örn: bundle ID + service ID web Sign-in için).
+APPLE_BUNDLE_IDS = [
+    s.strip() for s in os.getenv("APPLE_BUNDLE_IDS", "com.fithubpoint.app").split(",") if s.strip()
+]
+APPLE_ISSUER = "https://appleid.apple.com"
+APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"
+
+# In-process cache for Apple JWKS keys (refreshed every hour)
+_apple_keys_cache = {"keys": None, "expires_at": 0.0}
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +207,170 @@ def google_auth(req: GoogleAuthRequest, db=Depends(get_db)):
             RETURNING id, email, full_name, role
             """,
             (email, name, google_sub),
+        )
+        new_user = cur.fetchone()
+        if not new_user:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Failed to create user")
+        user_id = new_user["id"]
+        cur.execute(
+            """
+            INSERT INTO clients (user_id, onboarding_done)
+            VALUES (%s, FALSE)
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+            (user_id,),
+        )
+        db.commit()
+        user = dict(new_user)
+
+    token = create_token(user["id"])
+    return {
+        "access_token": token,
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user.get("email"),
+            "full_name": user.get("full_name"),
+            "role": user.get("role", "client"),
+        },
+    }
+
+
+# ─── Apple Sign-In (Apple Review Guideline 4.8 — Google/Facebook varsa zorunlu) ───
+
+def _fetch_apple_public_keys():
+    """Apple JWKS endpoint'inden public key listesi (1 saat cache'li)."""
+    if _apple_keys_cache["keys"] and time.time() < _apple_keys_cache["expires_at"]:
+        return _apple_keys_cache["keys"]
+    try:
+        resp = _http.get(APPLE_KEYS_URL, timeout=10)
+        resp.raise_for_status()
+        keys = resp.json().get("keys", []) or []
+        _apple_keys_cache["keys"] = keys
+        _apple_keys_cache["expires_at"] = time.time() + 3600
+        return keys
+    except Exception as e:
+        logger.warning(f"[APPLE_AUTH] JWKS fetch failed: {e}")
+        raise HTTPException(status_code=503, detail="Apple ile dogrulama gecici olarak kullanilamiyor")
+
+
+def _verify_apple_identity_token(identity_token: str) -> dict:
+    """Apple identity_token JWT'sini Apple public key'leriyle dogrular.
+    Issuer + audience + signature kontrolü yapar. Geçerli payload döndürür."""
+    if not identity_token or not identity_token.strip():
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    try:
+        header = jose_jwt.get_unverified_header(identity_token)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    kid = header.get("kid")
+    if not kid:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    keys = _fetch_apple_public_keys()
+    matching_key = next((k for k in keys if k.get("kid") == kid), None)
+    if not matching_key:
+        # Cache stale ise tek seferlik refresh dene
+        _apple_keys_cache["expires_at"] = 0
+        keys = _fetch_apple_public_keys()
+        matching_key = next((k for k in keys if k.get("kid") == kid), None)
+        if not matching_key:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    try:
+        payload = jose_jwt.decode(
+            identity_token,
+            matching_key,
+            algorithms=["RS256"],
+            audience=APPLE_BUNDLE_IDS if len(APPLE_BUNDLE_IDS) > 1 else APPLE_BUNDLE_IDS[0],
+            issuer=APPLE_ISSUER,
+            options={"verify_at_hash": False},
+        )
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token suresi dolmus")
+    except JWTError as e:
+        logger.warning(f"[APPLE_AUTH] JWT verify failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return payload
+
+
+@router.post("/apple")
+def apple_auth(payload: dict = Body(...), db=Depends(get_db)):
+    """Apple Sign-In: Flutter'dan gelen identity_token (JWT) Apple ile doğrulanır.
+    Body: { "id_token": "<JWT>", "user": { "name": "...", "email": "..." } }
+       Apple email ve isim yalnızca ilk girişte gelir, sonraki girişlerde
+       Flutter `user` payload'unu boş gönderir.
+    """
+    identity_token = (payload.get("id_token") or "").strip()
+    user_info = payload.get("user") or {}
+    if not isinstance(user_info, dict):
+        user_info = {}
+    fallback_name = (user_info.get("name") or "").strip() or None
+    fallback_email = (user_info.get("email") or "").strip() or None
+
+    if not identity_token:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    claims = _verify_apple_identity_token(identity_token)
+    apple_sub = claims.get("sub")
+    email = claims.get("email") or fallback_email
+    email_verified = claims.get("email_verified")
+    if isinstance(email_verified, str):
+        email_verified = email_verified.lower() == "true"
+    if not apple_sub:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    cur = db.cursor()
+
+    # Find by Apple sub first, then by email
+    cur.execute(
+        """
+        SELECT id, email, full_name, role
+        FROM users
+        WHERE (auth_provider = 'apple' AND provider_user_id = %s)
+           OR (email = %s AND email IS NOT NULL)
+        ORDER BY CASE WHEN auth_provider = 'apple' THEN 0 ELSE 1 END
+        LIMIT 1
+        """,
+        (apple_sub, email or ""),
+    )
+    user_row = cur.fetchone()
+
+    if user_row:
+        user_id = user_row["id"]
+        # Apple link'i yoksa ekle
+        cur.execute(
+            """
+            UPDATE users
+            SET auth_provider = 'apple',
+                provider_user_id = %s,
+                updated_at = NOW()
+            WHERE id = %s AND (auth_provider IS NULL OR auth_provider != 'apple')
+            """,
+            (apple_sub, user_id),
+        )
+        db.commit()
+        user = dict(user_row)
+    else:
+        if not email:
+            # İlk Apple girişinde email genelde gelir; "Hide My Email" aktifse
+            # @privaterelay.appleid.com formatında gelir, yine de gelir.
+            # Email yoksa hesap oluşturamayız.
+            raise HTTPException(
+                status_code=400,
+                detail="Apple hesabinda email bilgisi yok. Lütfen E-posta paylaşımına izin verin.",
+            )
+        cur.execute(
+            """
+            INSERT INTO users
+                (email, password_hash, full_name, role,
+                 auth_provider, provider_user_id, email_verified,
+                 created_at, updated_at)
+            VALUES (%s, NULL, %s, 'client', 'apple', %s, %s, NOW(), NOW())
+            RETURNING id, email, full_name, role
+            """,
+            (email, fallback_name, apple_sub, bool(email_verified) if email_verified is not None else True),
         )
         new_user = cur.fetchone()
         if not new_user:
