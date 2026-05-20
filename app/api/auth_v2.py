@@ -25,6 +25,7 @@ class RegisterRequest(BaseModel):
     password: str
     password_confirm: str
     birthdate: str  # YYYY-MM-DD
+    accepted_terms: bool = False  # KVKK + Kullanim Sartlari onayi (zorunlu)
 
     @field_validator('email')
     @classmethod
@@ -139,6 +140,10 @@ def register(body: RegisterRequest, db=Depends(get_db)):
     """Register new user with OTP + email verification."""
     cur = db.cursor(cursor_factory=RealDictCursor)
 
+    # KVKK + Kullanim Sartlari onayi zorunlu
+    if not body.accepted_terms:
+        raise HTTPException(400, "Devam etmek için kullanım şartlarını ve KVKK aydınlatma metnini kabul etmelisiniz.")
+
     # Password match
     if body.password != body.password_confirm:
         raise HTTPException(400, "Şifreler eşleşmiyor")
@@ -174,12 +179,12 @@ def register(body: RegisterRequest, db=Depends(get_db)):
            phone_verified, email_verified,
            otp_code, otp_expires_at, otp_attempts,
            email_verification_token, email_verification_expires_at,
-           created_at)
+           accepted_terms_at, created_at)
            VALUES (%s, %s, %s, %s, 'client', %s,
            FALSE, FALSE,
            %s, %s, 0,
            %s, %s,
-           NOW())
+           NOW(), NOW())
            RETURNING id""",
         (body.email, body.phone, password_hash, body.full_name, birthdate,
          otp_hash, datetime.utcnow() + timedelta(minutes=5),

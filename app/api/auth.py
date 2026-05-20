@@ -202,8 +202,8 @@ def google_auth(req: GoogleAuthRequest, db=Depends(get_db)):
             )
         cur.execute(
             """
-            INSERT INTO users (email, password_hash, full_name, role, auth_provider, provider_user_id, created_at, updated_at)
-            VALUES (%s, NULL, %s, 'client', 'google', %s, NOW(), NOW())
+            INSERT INTO users (email, password_hash, full_name, role, auth_provider, provider_user_id, accepted_terms_at, created_at, updated_at)
+            VALUES (%s, NULL, %s, 'client', 'google', %s, NOW(), NOW(), NOW())
             RETURNING id, email, full_name, role
             """,
             (email, name, google_sub),
@@ -366,8 +366,8 @@ def apple_auth(payload: dict = Body(...), db=Depends(get_db)):
             INSERT INTO users
                 (email, password_hash, full_name, role,
                  auth_provider, provider_user_id, email_verified,
-                 created_at, updated_at)
-            VALUES (%s, NULL, %s, 'client', 'apple', %s, %s, NOW(), NOW())
+                 accepted_terms_at, created_at, updated_at)
+            VALUES (%s, NULL, %s, 'client', 'apple', %s, %s, NOW(), NOW(), NOW())
             RETURNING id, email, full_name, role
             """,
             (email, fallback_name, apple_sub, bool(email_verified) if email_verified is not None else True),
