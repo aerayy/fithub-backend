@@ -53,10 +53,17 @@ def get_current_user(
         "email": user_row["email"],
         "role": user_row["role"],
     }
-    
+
+    # Sentry user context — sadece user_id + role gönder (email PII, atlanır)
+    try:
+        import sentry_sdk
+        sentry_sdk.set_user({"id": str(user["id"]), "role": user["role"]})
+    except Exception:
+        pass  # Sentry yoksa sessiz geç
+
     # Debug log
     logger.debug(f"get_current_user: user_id={user['id']}, role={user['role']}")
-    
+
     return user
 
 def require_role(*roles: str):
