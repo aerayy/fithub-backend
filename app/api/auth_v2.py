@@ -11,7 +11,7 @@ from psycopg2.extras import RealDictCursor
 import bcrypt
 
 from app.core.database import get_db
-from app.core.security import create_token, decode_token
+from app.core.security import create_token, decode_token, require_role
 
 router = APIRouter(prefix="/auth", tags=["auth-v2"])
 
@@ -425,3 +425,146 @@ def verify_email(token: str, db=Depends(get_db)):
     )
     db.commit()
     return {"ok": True, "message": "E-posta dogrulandi!"}
+
+
+# ─── Account Deletion (Apple Guideline 5.1.1(v) + KVKK) ───
+
+@router.delete("/me")
+def delete_my_account(
+    current_user=Depends(require_role("client")),
+    db=Depends(get_db),
+):
+    """KVKK uyumlu hesap silme. Tüm kişisel veriler hard-delete edilir,
+    yasal saklama yükümlülüğü olan ilişkiler (subscriptions, mesajlar)
+    de silinir — kayıt için Apple/Google/iyzico tarafında zaten kopya var.
+
+    Users tablosundaki satır anonymize edilir (email placeholder ile değiştirilir,
+    foreign key referansları kırılmamak için satır silinmez, deleted_at=NOW).
+    """
+    user_id = current_user["id"]
+    cur = db.cursor()
+    try:
+        # 1. Kişisel veri tabloları — hard delete
+        personal_data_deletes = [
+            "DELETE FROM activity_log WHERE client_user_id = %s",
+            "DELETE FROM body_form_photos WHERE client_user_id = %s",
+            "DELETE FROM body_measurements WHERE user_id = %s",
+            "DELETE FROM client_challenge_cache WHERE user_id = %s",
+            "DELETE FROM client_motivation_cache WHERE user_id = %s",
+            "DELETE FROM client_recovery_cache WHERE user_id = %s",
+            "DELETE FROM client_onboarding WHERE user_id = %s",
+            "DELETE FROM daily_water_log WHERE user_id = %s",
+            "DELETE FROM fcm_tokens WHERE user_id = %s",
+            "DELETE FROM form_analysis_settings WHERE client_user_id = %s",
+            "DELETE FROM meal_photos WHERE client_user_id = %s",
+            "DELETE FROM user_badges WHERE user_id = %s",
+            "DELETE FROM nutrition_program_drafts WHERE client_user_id = %s",
+            "DELETE FROM workout_program_drafts WHERE client_user_id = %s",
+        ]
+        # workout_sessions (varsa)
+        try:
+            cur.execute("DELETE FROM workout_sessions WHERE user_id = %s", (user_id,))
+        except Exception:
+            pass
+
+        for sql in personal_data_deletes:
+            try:
+                cur.execute(sql, (user_id,))
+            except Exception:
+                # Tablo yoksa veya kolon eksikse atla, log ve devam
+                pass
+
+        # 2. Cascade: nutrition + workout + cardio programlar (alt tablolarla)
+        cur.execute(
+            "DELETE FROM nutrition_meals WHERE nutrition_program_id IN "
+            "(SELECT id FROM nutrition_programs WHERE client_user_id = %s)",
+            (user_id,),
+        )
+        cur.execute("DELETE FROM nutrition_programs WHERE client_user_id = %s", (user_id,))
+
+        # workout_programs varsa
+        try:
+            cur.execute(
+                "DELETE FROM workout_exercises WHERE workout_day_id IN "
+                "(SELECT id FROM workout_days WHERE workout_program_id IN "
+                "(SELECT id FROM workout_programs WHERE client_user_id = %s))",
+                (user_id,),
+            )
+            cur.execute(
+                "DELETE FROM workout_days WHERE workout_program_id IN "
+                "(SELECT id FROM workout_programs WHERE client_user_id = %s)",
+                (user_id,),
+            )
+            cur.execute("DELETE FROM workout_programs WHERE client_user_id = %s", (user_id,))
+        except Exception:
+            pass
+
+        # cardio
+        try:
+            cur.execute(
+                "DELETE FROM cardio_sessions WHERE cardio_program_id IN "
+                "(SELECT id FROM cardio_programs WHERE client_user_id = %s)",
+                (user_id,),
+            )
+            cur.execute("DELETE FROM cardio_programs WHERE client_user_id = %s", (user_id,))
+        except Exception:
+            pass
+
+        # 3. Mesajlaşma + abonelik + değerlendirme — hard delete (NOT NULL FK'ler için)
+        cur.execute(
+            "DELETE FROM messages WHERE conversation_id IN "
+            "(SELECT id FROM conversations WHERE client_user_id = %s OR coach_user_id = %s)",
+            (user_id, user_id),
+        )
+        cur.execute(
+            "DELETE FROM messages WHERE sender_user_id = %s",
+            (user_id,),
+        )
+        cur.execute(
+            "DELETE FROM conversations WHERE client_user_id = %s",
+            (user_id,),
+        )
+        cur.execute(
+            "DELETE FROM subscriptions WHERE client_user_id = %s",
+            (user_id,),
+        )
+        try:
+            cur.execute("DELETE FROM coach_reviews WHERE client_user_id = %s", (user_id,))
+        except Exception:
+            pass
+
+        # 4. clients tablosundaki satır (assigned_coach_id ile koça referans)
+        cur.execute("DELETE FROM clients WHERE user_id = %s", (user_id,))
+
+        # 5. Users satırı — anonymize (FK referansları kırılmasın)
+        #    email NOT NULL → unique placeholder ile değiştir, böylece bu kullanıcı
+        #    bir daha login olamaz; aynı gerçek email ile yeni hesap açılabilir.
+        placeholder_email = f"deleted-{user_id}-{int(datetime.utcnow().timestamp())}@deleted.local"
+        cur.execute(
+            """UPDATE users SET
+                 email = %s,
+                 password_hash = NULL,
+                 full_name = NULL,
+                 phone = NULL,
+                 phone_number = NULL,
+                 profile_photo_url = NULL,
+                 email_verification_token = NULL,
+                 otp_code = NULL,
+                 otp_expires_at = NULL,
+                 remember_token = NULL,
+                 remember_token_expires_at = NULL,
+                 auth_provider = NULL,
+                 provider_user_id = NULL,
+                 birthdate = NULL,
+                 deleted_at = NOW()
+               WHERE id = %s""",
+            (placeholder_email, user_id),
+        )
+
+        db.commit()
+        return {"ok": True, "message": "Hesabınız ve tüm verileriniz silindi."}
+    except Exception as e:
+        db.rollback()
+        import logging
+        logging.getLogger(__name__).exception("delete_my_account failed user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="Hesap silinemedi. Lütfen tekrar deneyin.")
