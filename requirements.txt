@@ -12,3 +12,4 @@ requests
 google-auth
 cloudinary
 websockets
+sentry-sdk[fastapi]>=2.0.0

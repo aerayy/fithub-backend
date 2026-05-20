@@ -15,6 +15,16 @@ def health():
     return {"status": "ok"}
 
 
+@router.get("/_sentry_test")
+def sentry_test(key: str = ""):
+    """Sentry'ye intentional exception gönderir. ADMIN_API_KEY ile korumalı."""
+    import os
+    expected = os.getenv("ADMIN_API_KEY", "")
+    if not expected or key != expected:
+        return {"ok": False, "error": "unauthorized"}
+    raise RuntimeError("sentry_test: intentional crash (ignore in dashboard)")
+
+
 @router.get("/_openai_ping")
 async def openai_ping(model: str = "gpt-4.1-mini", timeout_s: float = 25.0):
     """Minimal OpenAI roundtrip test — Render→OpenAI baglantisinin sagligini olcer.
