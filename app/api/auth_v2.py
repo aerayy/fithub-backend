@@ -84,6 +84,23 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+    new_password_confirm: str
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_new_password(cls, v):
+        if len(v) < 8:
+            raise ValueError('Şifre en az 8 karakter olmalı')
+        if not re.search(r'[0-9]', v):
+            raise ValueError('Şifre en az 1 rakam içermeli')
+        if not re.search(r'[a-zA-Z]', v):
+            raise ValueError('Şifre en az 1 harf içermeli')
+        return v
+
+
 # ─── Helpers ───
 
 def _hash_otp(otp: str) -> str:
@@ -430,6 +447,51 @@ def verify_email(token: str, db=Depends(get_db)):
     )
     db.commit()
     return {"ok": True, "message": "E-posta dogrulandi!"}
+
+
+# ─── Change Password (logged-in user) ───
+
+@router.post("/change-password")
+def change_password(
+    body: ChangePasswordRequest,
+    current_user=Depends(require_role("client")),
+    db=Depends(get_db),
+):
+    """Giriş yapmış kullanıcı için şifre değiştirme.
+    Eski şifre doğrulanır, yeni şifre validate edilir, hash güncellenir."""
+    if body.new_password != body.new_password_confirm:
+        raise HTTPException(400, "Yeni şifreler eşleşmiyor")
+
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "SELECT password_hash, auth_provider FROM users WHERE id = %s",
+        (current_user["id"],),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Kullanıcı bulunamadı")
+
+    if not row.get("password_hash"):
+        # OAuth (Google/Apple) ile kayıt olan kullanıcının şifresi yok
+        provider = row.get("auth_provider") or "OAuth"
+        raise HTTPException(
+            400,
+            f"{provider.capitalize()} ile giriş yaptığınız için şifre değiştiremezsiniz.",
+        )
+
+    if not _check_password(body.old_password, row["password_hash"]):
+        raise HTTPException(401, "Mevcut şifreniz hatalı")
+
+    if body.old_password == body.new_password:
+        raise HTTPException(400, "Yeni şifre eskisiyle aynı olamaz")
+
+    new_hash = _hash_password(body.new_password)
+    cur.execute(
+        "UPDATE users SET password_hash = %s, updated_at = NOW() WHERE id = %s",
+        (new_hash, current_user["id"]),
+    )
+    db.commit()
+    return {"ok": True, "message": "Şifreniz başarıyla değiştirildi"}
 
 
 # ─── Account Deletion (Apple Guideline 5.1.1(v) + KVKK) ───
