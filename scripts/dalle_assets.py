@@ -1,4 +1,6 @@
-"""Generate DALL-E 3 assets for the FitHub app.
+from __future__ import annotations
+
+"""Generate gpt-image-1 (DALL-E successor) assets for the FitHub app.
 
 Usage:
     cd fithub-backend
@@ -9,18 +11,18 @@ Output:
     scripts/dalle_output/<asset_name>.png  (saved locally)
     Copy the ones you like to flutter-app/assets/images/ai/
 
-Cost notes (Jan 2026):
-    DALL-E 3 standard 1024x1024 : ~$0.040 / image
-    DALL-E 3 HD       1024x1024 : ~$0.080 / image
-    DALL-E 3 standard 1024x1792 : ~$0.080 / image (portrait)
-    Total batch (all 6 assets standard) ≈ $0.30
+Cost notes (2026):
+    gpt-image-1 1024x1024 high   : ~$0.19 / image
+    gpt-image-1 1024x1024 medium : ~$0.07 / image
+    gpt-image-1 1024x1024 low    : ~$0.02 / image
+    gpt-image-1 1024x1536 high   : ~$0.25 / image
 """
 import argparse
+import base64
 import os
 import sys
 import time
 from pathlib import Path
-from urllib.request import urlopen
 
 try:
     from dotenv import load_dotenv
@@ -40,20 +42,26 @@ OUT_DIR.mkdir(exist_ok=True)
 
 
 # Asset registry — id → (prompt, size, quality)
+# Sizes valid for gpt-image-1: 1024x1024, 1536x1024, 1024x1536, auto
+# Quality: low, medium, high, auto
 ASSETS = {
     # AI Coach avatar — used in generating screen, chat, profile card
     "ai_avatar": {
         "prompt": (
-            "Premium AI fitness coach avatar, futuristic minimalist 3D render, "
-            "abstract humanoid silhouette made of glowing teal and purple "
-            "neural network nodes and connection lines, holographic translucent "
-            "effect, deep dark background with subtle gradient (charcoal to "
-            "midnight blue), professional tech brand identity, centered "
-            "composition, soft inner glow, no text, no logos, no body parts "
-            "visible, just an abstract symbolic representation of intelligence."
+            "Mobile app icon design, square format with rounded corners aesthetic. "
+            "Full-bleed dark navy to deep purple gradient background covering "
+            "ENTIRE square edge to edge — NO white border, NO sticker padding, "
+            "NO empty space around the icon. Centered abstract luminous symbol: "
+            "a glowing orb of swirling teal and violet light threads with "
+            "bright bioluminescent core, soft outer halo, holographic depth, "
+            "subtle floating particles. Modern premium tech aesthetic similar "
+            "to Anthropic Claude or OpenAI app icons — refined, sophisticated, "
+            "minimal. The dark gradient must extend fully to all four edges. "
+            "Absolutely no humanoid figure, no face, no body, no text, no "
+            "letters. Photorealistic 3D render quality."
         ),
         "size": "1024x1024",
-        "quality": "hd",  # avatar uses HD for clarity
+        "quality": "high",
     },
     # Tier card decorative backgrounds — abstract, blend with dark UI
     "starter_bg": {
@@ -64,7 +72,7 @@ ASSETS = {
             "no text, no figures, no objects."
         ),
         "size": "1024x1024",
-        "quality": "standard",
+        "quality": "medium",
     },
     "pro_bg": {
         "prompt": (
@@ -74,7 +82,7 @@ ASSETS = {
             "no objects, smooth not chaotic."
         ),
         "size": "1024x1024",
-        "quality": "standard",
+        "quality": "medium",
     },
     "elite_bg": {
         "prompt": (
@@ -84,7 +92,7 @@ ASSETS = {
             "figures, no objects, very subtle and elegant."
         ),
         "size": "1024x1024",
-        "quality": "standard",
+        "quality": "medium",
     },
     # Onboarding hero — optional, ileride kullanılabilir
     "onboarding_hero": {
@@ -94,8 +102,8 @@ ASSETS = {
             "teal accents, minimalist 3D render, professional brand aesthetic, "
             "no people, no equipment, no text."
         ),
-        "size": "1024x1792",  # portrait — hero
-        "quality": "standard",
+        "size": "1024x1536",  # portrait — hero
+        "quality": "medium",
     },
     # Goal visualization sample — Elite feature mockup
     "goal_visualization_sample": {
@@ -107,29 +115,29 @@ ASSETS = {
             "goal, professional aesthetic, no text."
         ),
         "size": "1024x1024",
-        "quality": "standard",
+        "quality": "medium",
     },
 }
 
 
 def generate_asset(client: OpenAI, asset_id: str, spec: dict) -> Path | None:
-    """Generate one asset via DALL-E 3 and save locally."""
+    """Generate one asset via gpt-image-1 and save locally."""
     print(f"  Generating: {asset_id} ({spec['size']}, {spec['quality']})...")
     try:
         t0 = time.time()
         response = client.images.generate(
-            model="dall-e-3",
+            model="gpt-image-1",
             prompt=spec["prompt"],
             size=spec["size"],
             quality=spec["quality"],
             n=1,
         )
-        img_url = response.data[0].url
+        # gpt-image-1 returns base64 (b64_json), not URL
+        b64 = response.data[0].b64_json
         elapsed = time.time() - t0
 
         out_path = OUT_DIR / f"{asset_id}.png"
-        with urlopen(img_url) as r:
-            out_path.write_bytes(r.read())
+        out_path.write_bytes(base64.b64decode(b64))
 
         size_kb = out_path.stat().st_size // 1024
         print(f"  ✓ {asset_id} → {out_path}  ({size_kb}KB, {elapsed:.1f}s)")
