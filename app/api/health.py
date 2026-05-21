@@ -25,6 +25,48 @@ def sentry_test(key: str = ""):
     raise RuntimeError("sentry_test: intentional crash (ignore in dashboard)")
 
 
+@router.get("/_fcm_status")
+def fcm_status(key: str = ""):
+    """FCM kurulum durumu raporu. ADMIN_API_KEY ile korumalı."""
+    import os
+    expected = os.getenv("ADMIN_API_KEY", "")
+    if not expected or key != expected:
+        return {"ok": False, "error": "unauthorized"}
+    from app.services import push_notification as pn
+    pn._init_firebase()
+    status = {
+        "firebase_sdk_available": pn._firebase_available,
+        "firebase_initialized": pn._firebase_initialized,
+        "service_account_env_set": bool(os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")),
+        "service_account_file_exists": os.path.exists(
+            os.path.join(os.path.dirname(pn.__file__), "../../firebase-service-account.json")
+        ),
+    }
+    return {"ok": True, "status": status}
+
+
+@router.get("/_fcm_test")
+def fcm_test(user_id: int = 0, key: str = ""):
+    """Verilen user_id'nin tum FCM tokenlerine test push atar."""
+    import os
+    expected = os.getenv("ADMIN_API_KEY", "")
+    if not expected or key != expected:
+        return {"ok": False, "error": "unauthorized"}
+    if not user_id:
+        return {"ok": False, "error": "user_id required"}
+    from app.services.push_notification import send_notification, _get_user_tokens
+    tokens = _get_user_tokens(user_id)
+    if not tokens:
+        return {"ok": False, "error": f"no fcm tokens for user_id={user_id}"}
+    send_notification(
+        user_id=user_id,
+        title="FitHub Test",
+        body="Push notification calisiyor!",
+        data={"type": "test"},
+    )
+    return {"ok": True, "user_id": user_id, "tokens_count": len(tokens)}
+
+
 @router.get("/_send_test_email")
 def send_test_email(to: str = "", key: str = ""):
     """Resend bağlantısını test eder. ADMIN_API_KEY ile korumalı."""
