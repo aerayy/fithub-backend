@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 _API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 _FROM_EMAIL = os.getenv("EMAIL_FROM", "FitHub <noreply@fithubpoint.com>")
-_DEFAULT_REPLY_TO = os.getenv("EMAIL_REPLY_TO", "support@fithubpoint.com")
+_DEFAULT_REPLY_TO = os.getenv("EMAIL_REPLY_TO", "info@fithubpoint.com")
 
 _resend_client = None
 if _API_KEY:
