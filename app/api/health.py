@@ -25,6 +25,24 @@ def sentry_test(key: str = ""):
     raise RuntimeError("sentry_test: intentional crash (ignore in dashboard)")
 
 
+@router.get("/_send_test_email")
+def send_test_email(to: str = "", key: str = ""):
+    """Resend bağlantısını test eder. ADMIN_API_KEY ile korumalı."""
+    import os
+    expected = os.getenv("ADMIN_API_KEY", "")
+    if not expected or key != expected:
+        return {"ok": False, "error": "unauthorized"}
+    if not to or "@" not in to:
+        return {"ok": False, "error": "invalid_recipient"}
+    from app.services.email_service import send_email, render_welcome_email
+    result = send_email(
+        to=to,
+        subject="FitHub — Test E-postası",
+        html=render_welcome_email("Test Kullanıcı"),
+    )
+    return {"ok": "error" not in result and not result.get("skipped"), "result": result}
+
+
 @router.get("/_openai_ping")
 async def openai_ping(model: str = "gpt-4.1-mini", timeout_s: float = 25.0):
     """Minimal OpenAI roundtrip test — Render→OpenAI baglantisinin sagligini olcer.
