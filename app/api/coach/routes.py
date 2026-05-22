@@ -1529,7 +1529,7 @@ Asıl önemli olan **hangi egzersiz** değil, **kas grubu dağılımının denge
    - Upper günü (4 gün setupinde): EN AZ **1 göğüs + 1 sırt + 1 omuz + 1 kol** karışım.
    - YASAK KARIŞTIRMA: Push gününde biceps egzersizi YOK. Pull gününde göğüs pres/triceps YOK.
 3. **DİNLENME GÜNLERİ**: is_rest=true, session_title="Dinlenme", exercises=[] (boş array).
-4. **EGZERSİZ SAYISI** her antrenman günü için: 5-7 egzersiz.
+4. **EGZERSİZ SAYISI** her antrenman günü için: **MUTLAK MİNİMUM 5, IDEAL 6-7 EGZERSİZ**. 5'ten az koyma — bu mutlak kuraldır. Az koyarsan görev başarısız sayılır.
 5. **SIRALAMA** (her antrenman günü):
    - 1-2 ağır compound (Bench Press, Squat, Deadlift, Pull-Up, Overhead Press gibi) en başta
    - 2-3 orta makine/dumbbell varyasyonu
@@ -1614,10 +1614,11 @@ Asıl önemli olan **hangi egzersiz** değil, **kas grubu dağılımının denge
             raise HTTPException(status_code=502, detail="AI beklenen formatta yanıt vermedi")
 
         # 8b. Post-processing: SADECE cross-category leak'leri filtrele.
-        # Aynı egzersizin tekrarı (gün içi veya hafta içi) sorun değil — PPL × 2
-        # mantıksal olarak aynı egzersizi farklı günlerde kullanır. Önemli olan,
-        # bir gün içinde yanlış kategoriden egzersiz olmaması (Push'ta biceps vb.).
-        post_filter_stats = {"removed_cross_cat": 0, "violations": []}
+        # MINIMUM PROTECTION: drop sonrası <5 hareket kalırsa drop'lari rollback et —
+        # kullanıcı az hareketli program görmektense kategori sızıntılı program
+        # görsün. Cross-cat drop bir "quality polish" yapsın, "destruction" değil.
+        MIN_EXERCISES_PER_DAY = 5
+        post_filter_stats = {"removed_cross_cat": 0, "rolled_back": 0, "violations": []}
         for day_key, day_obj in (week_data.items() if isinstance(week_data, dict) else []):
             if not isinstance(day_obj, dict):
                 continue
@@ -1631,24 +1632,47 @@ Asıl önemli olan **hangi egzersiz** değil, **kas grubu dağılımının denge
             allowed_cats = _SPLIT_CATEGORIES.get(split_type, _SPLIT_CATEGORIES["fullbody"])
 
             kept: list = []
+            dropped: list = []
             for ex in exercises:
                 name = (ex.get("name") or "").strip()
                 if not name:
                     continue
                 cat = _exercise_category(name)
                 if cat != "other" and cat not in allowed_cats:
-                    post_filter_stats["removed_cross_cat"] += 1
-                    post_filter_stats["violations"].append(f"{day_key}/cross:{name}({cat}∉{split_type})")
+                    dropped.append((ex, f"{day_key}/cross:{name}({cat}∉{split_type})"))
                     continue
                 kept.append(ex)
+
+            # Rollback: filter kurban verdi ama minimum altına düştü → bazı drop'lari geri al
+            if len(kept) < MIN_EXERCISES_PER_DAY and dropped:
+                needed = MIN_EXERCISES_PER_DAY - len(kept)
+                rollback = dropped[:needed]
+                kept.extend([ex for ex, _ in rollback])
+                post_filter_stats["rolled_back"] += len(rollback)
+                # Geri kalanlar gerçekten drop edildi
+                for _, viol in dropped[needed:]:
+                    post_filter_stats["removed_cross_cat"] += 1
+                    post_filter_stats["violations"].append(viol)
+            else:
+                for _, viol in dropped:
+                    post_filter_stats["removed_cross_cat"] += 1
+                    post_filter_stats["violations"].append(viol)
+
             day_obj["exercises"] = kept
 
-        if post_filter_stats["removed_cross_cat"]:
-            logger.warning(
-                "workout_v2: post_filter removed cross_cat=%s details=%s",
-                post_filter_stats["removed_cross_cat"],
-                post_filter_stats["violations"][:10],
-            )
+        # Diagnostic: AI vs kept comparison
+        ai_total = sum(
+            len((day_obj or {}).get("exercises") or [])
+            for day_key, day_obj in week_data.items()
+            if isinstance(day_obj, dict) and not day_obj.get("is_rest")
+        )
+        logger.warning(
+            "workout_v2: post_filter final_total=%s dropped=%s rolled_back=%s violations=%s",
+            ai_total,
+            post_filter_stats["removed_cross_cat"],
+            post_filter_stats["rolled_back"],
+            post_filter_stats["violations"][:10],
+        )
 
         # 9. Save: workout_programs + workout_days + workout_exercises
         # Reuse existing draft if any
