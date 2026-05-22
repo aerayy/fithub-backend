@@ -85,6 +85,7 @@ from app.api.ws import router as ws_router
 from app.api.ai_coach import router as ai_coach_router
 from app.api.auth_v2 import router as auth_v2_router
 from app.api.ai_coach_purchase import router as ai_coach_purchase_router
+from app.api.ai_subscription import router as ai_subscription_router
 from app.api.superadmin import router as superadmin_router
 
 
@@ -129,6 +130,7 @@ app.include_router(upload_router)
 app.include_router(ws_router)
 app.include_router(ai_coach_router)
 app.include_router(ai_coach_purchase_router)
+app.include_router(ai_subscription_router)
 app.include_router(auth_v2_router)
 app.include_router(superadmin_router)
 
