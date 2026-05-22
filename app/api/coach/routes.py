@@ -1364,28 +1364,17 @@ async def generate_workout_program_v2(
             workout_days_set = {"mon", "wed", "fri"}  # default 3-day full body
         num_days = len(workout_days_set)
 
-        # 3. RAG: top 3 BeGreens training plans
-        similar = find_similar_training_plans(
-            db, age=age, weight_kg=weight, height_cm=height,
-            sessions_per_week=num_days, sessions_window=1, top_n=3,
-        )
-        if not similar:
-            similar = find_similar_training_plans(
-                db, age=age, weight_kg=weight, height_cm=height,
-                sessions_per_week=num_days, sessions_window=3, top_n=3,
-            )
-        if not similar:
-            logger.warning(
-                "workout_v2: no RAG candidates profile age=%s w=%s h=%s sessions=%s",
-                age, weight, height, num_days,
-            )
-            raise HTTPException(status_code=503, detail="Benzer profil bulunamadı, lütfen daha sonra deneyin")
-
-        plan_contents = [fetch_training_plan_content(db, p["plan_id"]) for p in similar]
-        rag_block = format_training_plans_for_prompt(similar, plan_contents)
+        # 3. RAG DISABLED — user feedback: RAG referansları AI'ı bozuyor.
+        # BeGreens planları farklı tarz/eski içerikler içeriyor; AI bunları
+        # şablon olarak kopyalayınca yapısal hatalar (kötü dağılım, kategori
+        # sızıntısı) oluşuyor. PPL prensiplerine güvenip, ek olarak
+        # exercise enum + güçlü prompt kuralları ile koçu yönetiyoruz.
+        similar = []
+        rag_block = ""  # boş bırak — prompt'ta da reference yok
 
         # 4. Exercise enum: gif'i olan exercise_library egzersizleri,
-        #    rag_training_exercises popülerliğine göre sıralı, top 200
+        #    rag_training_exercises popülerliğine göre sıralı, top 400
+        #    (200 → 400: AI'a daha geniş seçenek alanı, dengesiz dağılımı azaltır)
         cur.execute(
             """
             WITH top_rag_moves AS (
@@ -1394,7 +1383,7 @@ async def generate_workout_program_v2(
                 WHERE move_name IS NOT NULL AND TRIM(move_name) != ''
                 GROUP BY LOWER(TRIM(move_name))
                 ORDER BY cnt DESC
-                LIMIT 800
+                LIMIT 1500
             )
             SELECT el.canonical_name, COALESCE(MAX(tr.cnt), 0) AS popularity
             FROM exercise_library el
@@ -1407,7 +1396,7 @@ async def generate_workout_program_v2(
             """
         )
         all_exercises = [(r["canonical_name"], r["popularity"] or 0) for r in cur.fetchall() if r["canonical_name"]]
-        exercise_names = [n for n, _ in all_exercises[:200]]
+        exercise_names = [n for n, _ in all_exercises[:400]]
         if not exercise_names:
             raise HTTPException(status_code=500, detail="Egzersiz veritabanı boş")
 
@@ -1482,7 +1471,47 @@ async def generate_workout_program_v2(
 Push günü → SADECE: Göğüs + Omuz + Triceps (itme). Biceps/Sırt/Bacak YASAK.
 Pull günü → SADECE: Sırt + Biceps + Trapez + Arka Delt (çekme). Göğüs/Omuz Pres/Triceps/Bacak YASAK.
 Legs günü → SADECE: Quadriceps + Hamstring + Kalça + Baldır + Karın. Üst vücut YASAK.
-Upper günü (4 gün setupinde) → Göğüs + Sırt + Omuz + Kol karışık (Full Body-like)"""
+Upper günü (4 gün setupinde) → Göğüs + Sırt + Omuz + Kol karışık (Full Body-like)
+
+═══ GÜN İÇİ EGZERSİZ SIRALAMASI — PROFESYONEL ŞABLON ═══
+HER antrenman gününde 6 hareket bu sırayla:
+
+  PUSH günü için ideal sıralama:
+    1. AĞIR COMPOUND GÖĞÜS (Barbell Bench Press, Dumbbell Bench Press)  → 4 set × 5-8
+    2. AĞIR COMPOUND OMUZ (Overhead Press, Seated DB Shoulder Press)     → 4 set × 6-8
+    3. ORTA GÖĞÜS varyasyon (Incline DB Press, Incline Bench, Dips)      → 3 set × 8-10
+    4. ORTA OMUZ varyasyon (Arnold Press, Cable Shoulder Press)          → 3 set × 10-12
+    5. ISOLATION GÖĞÜS/OMUZ (Cable Fly, Lateral Raise, Pec Deck)         → 3 set × 12-15
+    6. ISOLATION TRICEPS (Pushdown, Skull Crusher, Overhead Extension)   → 3 set × 10-12
+
+  PULL günü için ideal sıralama:
+    1. AĞIR COMPOUND SIRT (Deadlift, Barbell Bent Over Row, Weighted Pull-Up) → 4 set × 5-8
+    2. DİKEY ÇEKİŞ (Pull-Up, Wide Lat Pulldown, Chin-Up)                     → 4 set × 6-10
+    3. YATAY ÇEKİŞ (T-Bar Row, Seated Cable Row, Dumbbell Row)               → 3 set × 8-10
+    4. SIRT ISOLATION (Straight Arm Pulldown, Face Pull, Reverse Fly)        → 3 set × 10-15
+    5. BICEPS COMPOUND (Barbell Curl, EZ-Bar Curl)                           → 3 set × 8-10
+    6. BICEPS ISOLATION (Hammer Curl, Cable Curl, Concentration Curl)        → 3 set × 10-12
+
+  LEGS günü için ideal sıralama:
+    1. AĞIR COMPOUND (Back Squat, Front Squat, Deadlift varyasyonu)    → 4 set × 5-8
+    2. İKİNCİ COMPOUND (Romanian Deadlift, Bulgarian Split Squat)      → 4 set × 6-10
+    3. MAKİNE QUAD (Leg Press, Hack Squat)                             → 3 set × 8-12
+    4. HAMSTRING (Lying Leg Curl, Seated Leg Curl)                     → 3 set × 10-12
+    5. KALÇA/GLUTE (Hip Thrust, Glute Bridge, Cable Kickback)          → 3 set × 10-15
+    6. BALDIR + KARIN (Standing Calf Raise + Plank/Crunch)             → 3 set × 12-20
+
+  UPPER günü için ideal sıralama:
+    1. COMPOUND GÖĞÜS (Bench Press)                                    → 4 set × 6-8
+    2. COMPOUND SIRT (Pull-Up, Bent Over Row)                          → 4 set × 6-8
+    3. COMPOUND OMUZ (Overhead Press)                                  → 3 set × 8-10
+    4. ISOLATION GÖĞÜS veya SIRT (Fly veya Lat Pulldown)              → 3 set × 10-12
+    5. BICEPS (Barbell Curl)                                           → 3 set × 8-10
+    6. TRICEPS (Pushdown, Skull Crusher)                               → 3 set × 8-10
+
+⚠ Bu şablon kesin değil — fakat 6 hareketi BU SIRA mantığında ayır:
+  COMPOUND → COMPOUND → ORTA → ORTA → ISOLATION → ISOLATION
+Compound (ağır barbell/dumbbell) hareket BAŞTA. Isolation (cable, makine, fly, curl)
+SONDA. Sınırlı zaman var, en yorucu hareketleri ilk başta yap."""
 
         body_focus_text = ", ".join(body_focus) if body_focus else "—"
         health_text = ", ".join(health_problems) if health_problems else "yok"
@@ -1504,8 +1533,6 @@ HAFTA YAPISI ({num_days} antrenman günü)
 {day_status_block}
 
 {ppl_guide}
-
-{rag_block}
 
 ⛔ **MUTLAK KURAL — KATEGORİ DİSİPLİNİ (çiğnersen görev başarısız)**:
 - Push gününde BİCEPS/SIRT/BACAK egzersizi YOK.
@@ -1565,9 +1592,13 @@ Asıl önemli olan **hangi egzersiz** değil, **kas grubu dağılımının denge
                 model="gpt-4.1-mini",
                 messages=[
                     {"role": "system", "content":
-                        "Sen Türkiye'de profesyonel bir spor antrenmanı koçusun. "
-                        "Verilen 3 referans programı şablon olarak kullanıp öğrenciye uyarlanmış "
-                        "haftalık antrenman programı yazıyorsun. Sadece JSON döndür."},
+                        "Sen Türkiye'nin en deneyimli, IFBB Pro standartlarında program "
+                        "yazan profesyonel fitness koçusun. 15+ yıl elite sporcu ve "
+                        "binlerce öğrenciye PPL temelli programlar yazdın. Bodybuilding "
+                        "+ Powerlifting + Functional sentezi tarzında yapılandırırsın. "
+                        "Yazdığın her program: doğru kas grubu dağılımı, doğru sıralama "
+                        "(compound → isolation), gerçekçi set/rep şemaları, kullanıcı "
+                        "profili ve hedefine birebir uyumludur. Sadece JSON döndür."},
                     {"role": "user", "content": prompt},
                 ],
                 response_format={
