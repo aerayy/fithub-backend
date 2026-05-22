@@ -70,9 +70,24 @@ MOVEMENT_PATTERNS = [
     "explosive", "gait", "stretch_mobility",
     "other",
 ]
-STABILITY = ["free", "machine", "cable", "bodyweight", "smith", "band"]
+
+# Primary equipment category (single value, indexed in DB).
+# ExerciseSelector profile.equipment ile direct lookup yapar.
+EQUIPMENT_TYPES = [
+    "barbell", "dumbbell", "cable", "machine",
+    "bodyweight", "kettlebell", "band", "smith",
+]
+
+# Mechanical equipment class — fixed path vs free.
+# "Smith machine bench press" → equipment_type=smith, equipment_class=smith.
+# "Cable lat pulldown" → equipment_type=cable, equipment_class=cable.
+# "Barbell bench press" → equipment_type=barbell, equipment_class=free.
+EQUIPMENT_CLASS = ["free", "machine", "cable", "bodyweight", "smith", "band"]
+
 GENDER_SKEW = ["neutral", "female_favored", "male_favored"]
 GOAL_TAGS = ["hypertrophy", "strength", "power", "endurance", "mobility", "fat_loss"]
+
+# Detailed equipment tokens (substitution + special-case filtering).
 EQUIPMENT_TOKENS = [
     "barbell", "dumbbell", "machine", "cable", "kettlebell", "bodyweight",
     "smith", "bench", "rack", "pull_up_bar", "ez_bar", "band", "resistance_band",
@@ -102,7 +117,9 @@ def build_schema(batch_size: int) -> dict:
                         "id": {"type": "integer"},
                         "movement_pattern": {"type": "string", "enum": MOVEMENT_PATTERNS},
                         "fatigue_score": {"type": "integer", "minimum": 1, "maximum": 10},
-                        "stability": {"type": "string", "enum": STABILITY},
+                        "equipment_type": {"type": "string", "enum": EQUIPMENT_TYPES},
+                        "equipment_class": {"type": "string", "enum": EQUIPMENT_CLASS},
+                        "stability_requirement": {"type": "integer", "minimum": 1, "maximum": 5},
                         "unilateral": {"type": "boolean"},
                         "complexity": {"type": "integer", "minimum": 1, "maximum": 5},
                         "gender_skew": {"type": "string", "enum": GENDER_SKEW},
@@ -126,7 +143,8 @@ def build_schema(batch_size: int) -> dict:
                         },
                     },
                     "required": [
-                        "id", "movement_pattern", "fatigue_score", "stability",
+                        "id", "movement_pattern", "fatigue_score",
+                        "equipment_type", "equipment_class", "stability_requirement",
                         "unilateral", "complexity", "gender_skew", "goal_tags",
                         "equipment_required", "equipment_alternative",
                     ],
@@ -167,10 +185,36 @@ Kurallar:
 - fatigue_score: 1-10. Ağır barbell compound = 8-10. Cable/machine isolation = 2-3.
   Deadlift/Squat/Power Clean = 9-10. Lateral Raise = 2.
 
-- stability: hareket nasıl yapılıyor? Barbell/Dumbbell free = "free".
-  Cable column = "cable". Selectorized machine = "machine".
-  Smith machine = "smith". Bodyweight (push-up/pull-up/dip) = "bodyweight".
-  Band = "band".
+- equipment_type: PRIMARY equipment kategorisi (single value). Hangi
+  ekipmanla yapılıyor? barbell|dumbbell|cable|machine|bodyweight|kettlebell|band|smith.
+    "Bench Press" → barbell
+    "Dumbbell Fly" → dumbbell
+    "Cable Crossover" → cable
+    "Leg Press" → machine
+    "Push-Up / Pull-Up" → bodyweight
+    "Kettlebell Swing" → kettlebell
+    "Band Pull-Apart" → band
+    "Smith Bench Press" → smith
+
+- equipment_class: MEKANIK yapı — hareket free-path mı fixed-path mı?
+    Barbell/Dumbbell free hareket → free
+    Selectorized makine fixed path → machine
+    Cable column (özgür kablo) → cable
+    Smith machine fixed bar → smith
+    Bodyweight → bodyweight
+    Band tension → band
+
+  Önemli: equipment_type ile farklı olabilir. "Smith Bench" hem
+  equipment_type=smith hem equipment_class=smith. "Cable Lat Pulldown"
+  equipment_type=cable, equipment_class=cable. "Hammer Strength Machine
+  Chest Press" equipment_type=machine, equipment_class=machine.
+
+- stability_requirement: 1-5 biyomekanik denge ihtiyacı.
+    1 = very_low — leg press, smith machine, hack squat, supported machines
+    2 = low — cable row, lat pulldown, machine fly
+    3 = medium — bilateral barbell compounds (bench, squat, deadlift)
+    4 = high — unilateral dumbbell, single-leg, free standing OHP
+    5 = very_high — Olympic lifts, pistol squat, single-arm overhead
 
 - unilateral: tek tarafla yapılıyor mu? Dumbbell row, single-leg deadlift,
   Bulgarian split squat, lunge → TRUE. Bench press, squat, deadlift → FALSE.
@@ -221,6 +265,11 @@ def build_user_prompt(rows: list[dict]) -> str:
 #  DB helpers
 # ────────────────────────────────────────────────────────────────────────
 def db_connect():
+    # DATABASE_URL takes precedence — set this to target production.
+    # Otherwise falls back to DB_HOST/PORT/USER/PASSWORD/NAME (local dev).
+    url = os.getenv("DATABASE_URL", "").strip()
+    if url:
+        return psycopg2.connect(url)
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
         port=int(os.getenv("DB_PORT", 5432)),
@@ -253,16 +302,18 @@ def write_back(conn, results: list[dict]) -> int:
     for r in results:
         cur.execute("""
             UPDATE exercise_library
-            SET movement_pattern = %(movement_pattern)s,
-                fatigue_score    = %(fatigue_score)s,
-                stability        = %(stability)s,
-                unilateral       = %(unilateral)s,
-                complexity       = %(complexity)s,
-                gender_skew      = CASE WHEN %(gender_skew)s = 'neutral'
-                                        THEN NULL ELSE %(gender_skew)s END,
-                goal_tags        = %(goal_tags)s,
-                equipment_required    = %(equipment_required)s,
-                equipment_alternative = %(equipment_alternative)s
+            SET movement_pattern       = %(movement_pattern)s,
+                fatigue_score          = %(fatigue_score)s,
+                equipment_type         = %(equipment_type)s,
+                equipment_class        = %(equipment_class)s,
+                stability_requirement  = %(stability_requirement)s,
+                unilateral             = %(unilateral)s,
+                complexity             = %(complexity)s,
+                gender_skew            = CASE WHEN %(gender_skew)s = 'neutral'
+                                              THEN NULL ELSE %(gender_skew)s END,
+                goal_tags              = %(goal_tags)s,
+                equipment_required     = %(equipment_required)s,
+                equipment_alternative  = %(equipment_alternative)s
             WHERE id = %(id)s
         """, r)
         n += cur.rowcount
@@ -319,7 +370,8 @@ async def run(args):
     csv_file = open(csv_path, "w", newline="", encoding="utf-8")
     writer = csv.writer(csv_file)
     writer.writerow([
-        "id", "name", "movement_pattern", "fatigue_score", "stability",
+        "id", "name", "movement_pattern", "fatigue_score",
+        "equipment_type", "equipment_class", "stability_requirement",
         "unilateral", "complexity", "gender_skew", "goal_tags",
         "equipment_required", "equipment_alternative",
     ])
@@ -350,7 +402,8 @@ async def run(args):
                 continue
             writer.writerow([
                 c["id"], name_by_id.get(c["id"], "?"),
-                c["movement_pattern"], c["fatigue_score"], c["stability"],
+                c["movement_pattern"], c["fatigue_score"],
+                c["equipment_type"], c["equipment_class"], c["stability_requirement"],
                 c["unilateral"], c["complexity"], c["gender_skew"],
                 "|".join(c["goal_tags"]),
                 "|".join(c["equipment_required"]),
