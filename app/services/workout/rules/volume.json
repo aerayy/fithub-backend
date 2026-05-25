@@ -1,0 +1,24 @@
+{
+  "_comment": "Weekly set bands per muscle x experience. Format: [MEV, MAV, MRV]. ProfileAnalyzer karari: conservative — default target = MAV-2; priority muscle = MAV; NEVER target MRV. Realistic users have imperfect sleep/nutrition/recovery so we trade hypothetical max growth for adherence + sustainability.",
+  "bands": {
+    "chest":      {"beginner": [8, 12, 16],  "intermediate": [10, 14, 20], "advanced": [12, 16, 22]},
+    "back":       {"beginner": [10, 14, 18], "intermediate": [12, 16, 22], "advanced": [14, 18, 24]},
+    "shoulder":   {"beginner": [6, 10, 16],  "intermediate": [8, 12, 18],  "advanced": [10, 14, 20]},
+    "rear_delts": {"beginner": [4, 8, 12],   "intermediate": [6, 10, 14],  "advanced": [8, 12, 16]},
+    "biceps":     {"beginner": [6, 10, 14],  "intermediate": [8, 12, 18],  "advanced": [10, 14, 20]},
+    "triceps":    {"beginner": [6, 10, 14],  "intermediate": [8, 12, 18],  "advanced": [10, 14, 20]},
+    "quads":      {"beginner": [8, 12, 18],  "intermediate": [10, 14, 20], "advanced": [12, 16, 22]},
+    "hamstrings": {"beginner": [6, 10, 14],  "intermediate": [8, 12, 18],  "advanced": [10, 14, 20]},
+    "glutes":     {"beginner": [8, 12, 18],  "intermediate": [10, 14, 22], "advanced": [12, 16, 24]},
+    "calves":     {"beginner": [4, 8, 14],   "intermediate": [6, 10, 16],  "advanced": [8, 12, 18]},
+    "core":       {"beginner": [4, 8, 14],   "intermediate": [6, 10, 16],  "advanced": [8, 12, 18]}
+  },
+  "goal_modifiers": {
+    "fat_loss":   {"target_offset": -1, "_note": "Lower volume — recovery during deficit is impaired. Hacim icin GE asagi cek."},
+    "endurance":  {"target_offset": -2, "_note": "Strength work serves general support; not the main driver."},
+    "general":    {"target_offset":  0},
+    "recomp":     {"target_offset":  0},
+    "hypertrophy":{"target_offset":  0},
+    "strength":   {"target_offset": -1, "_note": "Lower total sets but heavier loads (handled in intensity rules)."}
+  }
+}
