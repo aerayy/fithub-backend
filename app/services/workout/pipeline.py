@@ -26,7 +26,8 @@ from .profile_analyzer import build_training_profile, persist_profile
 from .split_planner import plan_split
 from .volume_planner import plan_volume
 from .exercise_selector import select_candidates_for_session
-from .session_assembler import assemble_all_sessions
+from .session_assembler import assemble_all_sessions, assemble_session
+from .validator import validate, repair_swap
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,59 @@ async def orchestrate(
     assembled = await assemble_all_sessions(sessions_with_pool, profile)
     logger.info("pipeline: assembled %d/%d sessions", len(assembled), len(split.sessions))
 
+    program = WeeklyProgram(
+        profile=profile,
+        split=split,
+        targets=targets,
+        sessions=assembled,
+    )
+
+    # Stage 6: Validation + repair loop
+    pools_by_day: dict[int, dict] = {
+        spec.day_index: pool for spec, _, pool in sessions_with_pool
+    }
+    report = validate(program, pools_by_day)
+    logger.info(
+        "pipeline: validation score=%d issues=%d (severities=%s)",
+        report.score, len(report.issues),
+        dict({sev: sum(1 for i in report.issues if i.severity == sev)
+              for sev in ("info", "swap", "regen_session", "fatal")}),
+    )
+
+    # Repair pass — apply swaps first (cheap), then regen sessions (1 LLM each)
+    if any(i.severity == "swap" for i in report.issues):
+        program, n_swaps = repair_swap(program, report.issues, pools_by_day)
+        logger.info("pipeline: %d swap repairs applied", n_swaps)
+
+    regen_targets = sorted({
+        i.session_day_index for i in report.issues
+        if i.severity == "regen_session" and i.session_day_index is not None
+    })
+    if regen_targets:
+        logger.info("pipeline: regen-session targets=%s", regen_targets)
+        for day_idx in regen_targets:
+            try:
+                spec, sess_target, pool = next(
+                    (s, t, p) for s, t, p in sessions_with_pool
+                    if s.day_index == day_idx
+                )
+            except StopIteration:
+                continue
+            new_session = await assemble_session(spec, sess_target, pool, profile)
+            if new_session:
+                # replace
+                program.sessions = [
+                    new_session if s.day_index == day_idx else s
+                    for s in program.sessions
+                ]
+
+    # Final pass — re-score after repair (won't auto-repair again, just for telemetry)
+    final_report = validate(program, pools_by_day)
+    logger.info(
+        "pipeline: post-repair score=%d (was %d) — issues=%d",
+        final_report.score, report.score, len(final_report.issues),
+    )
+
     if persist:
         try:
             profile_id = persist_profile(conn, profile)
@@ -94,9 +148,4 @@ async def orchestrate(
         except Exception as e:
             logger.warning("pipeline: profile persist skipped (%s)", e)
 
-    return WeeklyProgram(
-        profile=profile,
-        split=split,
-        targets=targets,
-        sessions=assembled,
-    )
+    return program
