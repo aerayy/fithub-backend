@@ -34,14 +34,8 @@ def save_program(
     validation_score: Optional[int] = None,
     training_profile_id: Optional[int] = None,
     is_active: bool = False,
+    microcycle: Optional[list] = None,
 ) -> int:
-    """Persist a WeeklyProgram. Returns workout_programs.id.
-
-    Args:
-        coach_user_id: who is the assigned coach? (AI coach = 60)
-        title: human label; defaults to "AI Programi — {split_id}"
-        is_active: False = draft (coach review). True = live.
-    """
     cur = conn.cursor(cursor_factory=RealDictCursor)
     user_id = program.profile.user_id
     title = title or f"AI Programi — {program.split.split_id}"
@@ -60,12 +54,16 @@ def save_program(
     )
     program_id: int = cur.fetchone()["id"]
 
-    # 7 days, marking rest days explicitly. Iterate Mon..Sun.
-    sessions_by_day = {s.day_index: s for s in program.sessions}
-    target_by_day = {t.day_index: t for t in program.targets.sessions}
-
-    # Pre-resolve canonical names in one query (cheap, avoids N+1)
-    all_ex_ids = list({e.exercise_id for s in program.sessions for e in s.exercises})
+    # Pre-resolve canonical names ONCE (across all 4 weeks if microcycle).
+    all_programs = [program]
+    if microcycle:
+        all_programs = [p for _, _, p in microcycle]
+    all_ex_ids = list({
+        e.exercise_id
+        for p in all_programs
+        for s in p.sessions
+        for e in s.exercises
+    })
     name_by_id: dict[int, str] = {}
     if all_ex_ids:
         cur.execute(
@@ -73,6 +71,47 @@ def save_program(
             (all_ex_ids,),
         )
         name_by_id = {r["id"]: r["canonical_name"] for r in cur.fetchall()}
+
+    def _write_week(week_index: int, week_program: WeeklyProgram) -> None:
+        """Inner helper — writes 7 workout_days + their workout_exercises
+        for one week."""
+        _write_week_rows(
+            cur=cur,
+            program_id=program_id,
+            week_index=week_index,
+            week_program=week_program,
+            name_by_id=name_by_id,
+        )
+
+    if microcycle:
+        for week_index, strategy, week_program in microcycle:
+            _write_week(week_index, week_program)
+            # program_microcycles audit row
+            cur.execute(
+                """
+                INSERT INTO program_microcycles
+                  (workout_program_id, week_number, delta_strategy, delta_payload, notes)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (workout_program_id, week_number) DO NOTHING
+                """,
+                (program_id, week_index, strategy, json.dumps({}), None),
+            )
+    else:
+        _write_week(1, program)
+
+    conn.commit()
+    logger.info(
+        "persistence: saved v3 program_id=%s user_id=%s coach=%s score=%s weeks=%s",
+        program_id, user_id, coach_user_id, validation_score,
+        len(microcycle) if microcycle else 1,
+    )
+    return program_id
+
+
+def _write_week_rows(*, cur, program_id, week_index, week_program, name_by_id) -> None:
+    """Write 7 workout_days rows + their workout_exercises for one week_index."""
+    sessions_by_day = {s.day_index: s for s in week_program.sessions}
+    target_by_day = {t.day_index: t for t in week_program.targets.sessions}
 
     for day_idx in range(7):
         day_key = _DAY_KEYS[day_idx]
@@ -114,11 +153,11 @@ def save_program(
 
         cur.execute(
             """
-            INSERT INTO workout_days (workout_program_id, day_of_week, order_index, day_payload)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO workout_days (workout_program_id, week_index, day_of_week, order_index, day_payload)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (program_id, day_key, day_idx, json.dumps(day_payload)),
+            (program_id, week_index, day_key, day_idx, json.dumps(day_payload)),
         )
         workout_day_id: int = cur.fetchone()["id"]
 
@@ -148,10 +187,3 @@ def save_program(
                     ex.exercise_id,
                 ),
             )
-
-    conn.commit()
-    logger.info(
-        "persistence: saved v3 program_id=%s user_id=%s coach=%s score=%s",
-        program_id, user_id, coach_user_id, validation_score,
-    )
-    return program_id

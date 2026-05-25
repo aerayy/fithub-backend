@@ -27,6 +27,7 @@ from app.services.workout import pipeline as workout_v3
 from app.services.workout.persistence import save_program as save_workout_v3
 from app.services.workout.validator import validate as validate_workout_v3
 from app.services.workout.exercise_selector import select_candidates_for_session
+from app.services.workout.progression import build_microcycle
 
 router = APIRouter(prefix="/ai-coach", tags=["ai-coach"])
 
@@ -168,11 +169,15 @@ async def purchase_ai_coach(
         except Exception as _e:
             v3_score = None
 
+        # Faz G: 4-haftalık mikrosüvel — baseline + add_reps + add_load + deload.
+        # Tek workout_programs satırı, 28 workout_days satırı (week_index 1..4).
+        microcycle = build_microcycle(workout_program)
         workout_program_id = save_workout_v3(
             db, workout_program,
             coach_user_id=AI_COACH_USER_ID,
             validation_score=v3_score,
             is_active=True,   # AI coach skips manual approval
+            microcycle=microcycle,
         )
 
         # 7. Auto-activate nutrition (workout already active via save_workout_v3)

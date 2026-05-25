@@ -11,7 +11,8 @@ from .routes import router
 def fetch_active_program_with_payload(client_user_id: int, db):
     """
     Fetch active workout program with days (including day_payload) and exercises.
-    Returns: program dict with days list, each day has day_payload and exercises.
+    Returns: program dict with days list, each day has day_payload, week_index
+    and exercises. v3 microcycle programs return 28 day rows (4 weeks × 7).
     """
     cur = db.cursor(cursor_factory=RealDictCursor)
 
@@ -32,13 +33,13 @@ def fetch_active_program_with_payload(client_user_id: int, db):
 
     program_id = program["id"]
 
-    # Fetch days with day_payload
+    # Fetch days with day_payload + week_index (migration 051)
     cur.execute(
         """
-        SELECT id, workout_program_id, day_of_week, order_index, day_payload, created_at, updated_at
+        SELECT id, workout_program_id, week_index, day_of_week, order_index, day_payload, created_at, updated_at
         FROM workout_days
         WHERE workout_program_id = %s
-        ORDER BY order_index ASC, id ASC
+        ORDER BY week_index ASC, order_index ASC, id ASC
         """,
         (program_id,),
     )
@@ -232,16 +233,20 @@ def get_active_workout_for_client(
 ):
     """
     Get active workout program for the authenticated client in UI-friendly format.
+
+    v3 microcycle support: response includes `weeks` map (1..4) plus a
+    flat `week` field pointing to the user's current microcycle week
+    (computed from days since program creation). Old clients reading
+    only `week` keep working.
+
     Returns:
     {
-        "program": { id, title, week_number, created_at, updated_at },
-        "week": {
-            "mon": dayPayloadOrNull,
-            "tue": ...,
-            ...
-        }
+        "program": { id, title, week_number, created_at, updated_at, current_week_index },
+        "week":  { "mon": ..., "tue": ..., ... }   // backward compat (current week)
+        "weeks": { "1": {...}, "2": {...}, "3": {...}, "4": {...} }
     }
     """
+    from datetime import datetime, timezone
     client_user_id = current_user["id"]
 
     try:
@@ -249,14 +254,31 @@ def get_active_workout_for_client(
         if not program_data:
             raise HTTPException(status_code=404, detail="Active workout program not found")
 
-        # KIRMIZI CIZGI safety net: bos kalan gif_url'leri Plank ile doldur
         cur = db.cursor(cursor_factory=RealDictCursor)
         fallback_gif = _fetch_universal_fallback_gif(cur)
 
-        # Build week response
-        week = build_week_response(program_data, program_data.get("days", []), fallback_gif)
+        # Group days by week_index (v3 mikrosüvel için; v2 ve eski v3 = hepsi week 1)
+        days_by_week: dict[int, list] = {}
+        for d in program_data.get("days", []) or []:
+            wk = d.get("week_index") or 1
+            days_by_week.setdefault(wk, []).append(d)
 
-        # Return in the requested format
+        weeks_response: dict[str, dict] = {}
+        for wk, day_rows in days_by_week.items():
+            weeks_response[str(wk)] = build_week_response(program_data, day_rows, fallback_gif)
+
+        # Compute "current week" from days since program creation
+        created_at = program_data.get("created_at")
+        current_week_index = 1
+        if created_at:
+            now = datetime.now(timezone.utc)
+            created_aware = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+            days_since = (now - created_aware).days
+            current_week_index = min(4, max(1, (days_since // 7) + 1))
+
+        # Backward compat: top-level `week` = current week's data
+        backward_week = weeks_response.get(str(current_week_index)) or weeks_response.get("1") or {}
+
         return {
             "program": {
                 "id": program_data["id"],
@@ -264,8 +286,11 @@ def get_active_workout_for_client(
                 "week_number": program_data.get("week_number") or 1,
                 "created_at": program_data.get("created_at"),
                 "updated_at": program_data.get("updated_at"),
+                "current_week_index": current_week_index,
+                "total_weeks": len(weeks_response),
             },
-            "week": week
+            "week": backward_week,
+            "weeks": weeks_response,
         }
 
     except HTTPException:
