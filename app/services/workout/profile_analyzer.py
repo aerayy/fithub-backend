@@ -37,19 +37,23 @@ _GOAL_MAP: dict[str, Goal] = {
     "kas yapmak": "hypertrophy",
     "muscle gain": "hypertrophy",
     "gain muscle": "hypertrophy",
+    "gain_muscle": "hypertrophy",
     "kas kazanma": "hypertrophy",
     # Strength
     "güçlenmek": "strength",
     "guclenmek": "strength",
     "strength": "strength",
     "get stronger": "strength",
+    "get_stronger": "strength",
     # Fat loss
     "yağ yakmak": "fat_loss",
     "yag yakmak": "fat_loss",
     "kilo vermek": "fat_loss",
     "weight loss": "fat_loss",
     "lose weight": "fat_loss",
-    # Recomp
+    "lose_weight": "fat_loss",
+    "fat_loss": "fat_loss",
+    # Recomp / tone
     "fit kalmak": "general",
     "general fitness": "general",
     "sağlıklı": "general",
@@ -57,6 +61,8 @@ _GOAL_MAP: dict[str, Goal] = {
     "şıkılaşmak": "recomp",
     "sikilasmak": "recomp",
     "tone": "recomp",
+    "get toned": "recomp",
+    "get_toned": "recomp",
     "recomp": "recomp",
     # Endurance
     "dayanıklılık": "endurance",
@@ -66,20 +72,29 @@ _GOAL_MAP: dict[str, Goal] = {
 # Experience bucketing — combines self-reported experience + how_fit + pushup
 # capability for a more robust signal than relying on one field.
 _EXPERIENCE_LITERAL: dict[str, Experience] = {
+    # Beginner signals
     "beginner": "beginner",
     "yeni başlıyorum": "beginner",
     "yeni basliyorum": "beginner",
     "hic": "beginner",
+    "no_experience": "beginner",
+    "first_time": "beginner",
     "1 yıldan az": "beginner",
     "<1 year": "beginner",
+    # Intermediate signals (active people, some training history)
     "intermediate": "intermediate",
     "orta seviye": "intermediate",
+    "regular_exercise": "intermediate",
+    "yes_year_ago": "intermediate",
+    "trained_before": "intermediate",
     "1-3 yıl": "intermediate",
     "1-3 years": "intermediate",
+    # Advanced signals
     "advanced": "advanced",
     "ileri seviye": "advanced",
     "3+ yıl": "advanced",
     "3+ years": "advanced",
+    "advanced_athlete": "advanced",
 }
 
 _FITNESS_LIT: dict[str, int] = {
@@ -112,6 +127,9 @@ _PLACE_EQUIPMENT: dict[str, list[EquipmentType]] = {
     "salon": ["barbell", "dumbbell", "cable", "machine", "bodyweight", "smith"],
     "açık alan": ["bodyweight", "kettlebell"],
     "outdoor": ["bodyweight", "kettlebell"],
+    "studio_classes": ["bodyweight", "dumbbell", "kettlebell", "band"],
+    "studio": ["bodyweight", "dumbbell", "kettlebell", "band"],
+    "park": ["bodyweight", "kettlebell"],
 }
 
 # session_duration buckets — pref_workout_length value → minutes
@@ -139,12 +157,14 @@ _FOCUS_MAP: dict[str, str] = {
     "sırt": "back",
     "sirt": "back",
     "shoulders": "shoulder",
+    "shoulder": "shoulder",
     "omuz": "shoulder",
     "arms": "biceps",   # ambiguous, pick biceps as proxy; user can refine
     "kol": "biceps",
     "biceps": "biceps",
     "triceps": "triceps",
     "legs": "quads",
+    "thighs": "quads",
     "bacak": "quads",
     "quads": "quads",
     "hamstrings": "hamstrings",
@@ -152,6 +172,7 @@ _FOCUS_MAP: dict[str, str] = {
     "kalça": "glutes",
     "kalca": "glutes",
     "core": "core",
+    "belly": "core",
     "karın": "core",
     "karin": "core",
     "abs": "core",
