@@ -64,21 +64,52 @@ def save_program(
     sessions_by_day = {s.day_index: s for s in program.sessions}
     target_by_day = {t.day_index: t for t in program.targets.sessions}
 
+    # Pre-resolve canonical names in one query (cheap, avoids N+1)
+    all_ex_ids = list({e.exercise_id for s in program.sessions for e in s.exercises})
+    name_by_id: dict[int, str] = {}
+    if all_ex_ids:
+        cur.execute(
+            "SELECT id, canonical_name FROM exercise_library WHERE id = ANY(%s)",
+            (all_ex_ids,),
+        )
+        name_by_id = {r["id"]: r["canonical_name"] for r in cur.fetchall()}
+
     for day_idx in range(7):
         day_key = _DAY_KEYS[day_idx]
         session = sessions_by_day.get(day_idx)
+
+        # Build day_payload in v2-compatible shape so the existing Flutter
+        # antrenman view (which expects blocks[].items[]) renders v3
+        # programs unchanged. Rest days keep blocks=[] like v2 did.
         if session is None:
             day_payload = {
-                "is_rest": True,
-                "session_title": "Dinlenme",
-                "exercises": [],
+                "kcal": "",
+                "blocks": [],
+                "warmup": {"items": [], "duration_min": ""},
+                "coach_note": "Dinlenme",
             }
         else:
+            items = []
+            for ex in session.exercises:
+                items.append({
+                    "name": name_by_id.get(ex.exercise_id, f"#{ex.exercise_id}"),
+                    "reps": ex.reps,
+                    "sets": ex.sets,
+                    "type": "exercise",
+                    "notes": f"RIR {ex.rir}. {ex.rationale}".strip(". ").strip(),
+                    "exercise_library_id": ex.exercise_id,
+                    "rir": ex.rir,
+                })
             day_payload = {
-                "is_rest": False,
-                "session_title": session.session_name,
-                "exercises_count": len(session.exercises),
-                "set_target": target_by_day.get(day_idx).total_set_budget if target_by_day.get(day_idx) else None,
+                "kcal": "",
+                "blocks": [
+                    {
+                        "title": session.session_name,
+                        "items": items,
+                    }
+                ],
+                "warmup": {"items": [], "duration_min": ""},
+                "coach_note": session.session_name,
             }
 
         cur.execute(
@@ -94,15 +125,11 @@ def save_program(
         if not session:
             continue
 
+        # workout_exercises side-channel: some screens query this table
+        # directly (gif_url join, set tracking). Keep it populated in
+        # parallel with day_payload.
         for ex_order, ex in enumerate(session.exercises, start=1):
-            # Look up canonical name once — we already have exercise_library_id
-            cur.execute(
-                "SELECT canonical_name FROM exercise_library WHERE id = %s",
-                (ex.exercise_id,),
-            )
-            row = cur.fetchone()
-            canonical_name = row["canonical_name"] if row else f"#{ex.exercise_id}"
-
+            canonical_name = name_by_id.get(ex.exercise_id, f"#{ex.exercise_id}")
             cur.execute(
                 """
                 INSERT INTO workout_exercises (
@@ -116,7 +143,6 @@ def save_program(
                     canonical_name,
                     ex.sets,
                     ex.reps,
-                    # RIR + rationale → notes payload for now (mobile parses as text)
                     f"RIR {ex.rir}. {ex.rationale}".strip(". ").strip(),
                     ex_order,
                     ex.exercise_id,
