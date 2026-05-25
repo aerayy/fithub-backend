@@ -25,12 +25,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Optional
 
 from openai import AsyncOpenAI
 
 from app.core.config import OPENAI_API_KEY
+
+# Model knob — env var lets us A/B without code change.
+# Default gpt-4.1 (5x mini cost but 1.5-2x faster + better instruction following).
+# Each session costs ~$0.012 → 5-session week ~$0.06, well within Pro tier margin.
+_WORKOUT_MODEL = os.getenv("WORKOUT_LLM_MODEL", "gpt-4.1")
 from .models import (
     AssembledExercise,
     AssembledSession,
@@ -200,7 +206,7 @@ async def assemble_session(
 
     async def _do_call():
         return await client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model=_WORKOUT_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},

@@ -1,17 +1,17 @@
 """AI Coach purchase + smart program generation.
 
-v2 (2026-05-18): Delegates nutrition + workout generation to the professional
-v2 endpoints (RAG + Constrained AI + JSON Schema enum). Cardio kept as heuristic
-since there is no cardio-v2 generator yet.
+v3 (2026-05-25): Workout uses the new rule-based pipeline (Phase A-E).
+Nutrition stays on v2 (RAG + Constrained AI) since output quality was solid.
 
 Flow:
   1. Idempotent check / exclusivity check
   2. Onboarding profile load
   3. Subscription create + assign AI Coach as student's coach (id=60)
-  4. db.commit() so v2 endpoints see the assignment
-  5. Parallel v2 generators via asyncio.gather (~30-60s)
-  6. Auto-activate (AI Coach skips manual coach approval)
-  7. Cardio (heuristic) + conversation + final commit
+  4. db.commit() so v3 pipeline + v2 nutrition endpoints see the assignment
+  5. Parallel: nutrition v2 + workout v3 pipeline via asyncio.gather (~25-50s)
+  6. Persist workout (v3 returns WeeklyProgram, we save_program it ourselves)
+  7. Auto-activate (AI Coach skips manual coach approval)
+  8. Cardio (heuristic) + conversation + final commit
 """
 import asyncio
 import json
@@ -23,6 +23,10 @@ from psycopg2.extras import RealDictCursor
 from app.core.database import get_db
 from app.core.security import require_role
 from app.services.badges import check_and_award
+from app.services.workout import pipeline as workout_v3
+from app.services.workout.persistence import save_program as save_workout_v3
+from app.services.workout.validator import validate as validate_workout_v3
+from app.services.workout.exercise_selector import select_candidates_for_session
 
 router = APIRouter(prefix="/ai-coach", tags=["ai-coach"])
 
@@ -37,7 +41,6 @@ async def purchase_ai_coach(
     # Late import to avoid circular dependency at module load
     from app.api.coach.routes import (
         generate_nutrition_program_v2,
-        generate_workout_program_v2,
     )
 
     client_user_id = current_user["id"]
@@ -132,35 +135,52 @@ async def purchase_ai_coach(
         # Fake "coach" current_user so v2 auth check passes (already-set assigned_coach_id=60)
         fake_coach_user = {"id": AI_COACH_USER_ID, "role": "coach", "email": "ai-coach@fithub.internal"}
 
-        # 6. Parallel v2 generation (~30-60s wall-clock)
+        # 6. Parallel: nutrition v2 + workout v3 pipeline (~25-50s wall-clock)
+        # v3 pipeline orchestrate çağırırken DB connection'i payload param'larıyla
+        # tutarlı geçiyor; persist=False çünkü save_program'i biz ayrıca
+        # çağıracağız (is_active=True ile, AI coach manuel onaya gerek yok).
         nutrition_task = generate_nutrition_program_v2(
             student_user_id=client_user_id,
             payload=nutrition_payload,
             db=db,
             current_user=fake_coach_user,
         )
-        workout_task = generate_workout_program_v2(
-            student_user_id=client_user_id,
-            payload=workout_payload,
-            db=db,
-            current_user=fake_coach_user,
+        workout_task = workout_v3.orchestrate(
+            conn=db,
+            user_id=client_user_id,
+            persist=False,
         )
-        nutrition_result, workout_result = await asyncio.gather(
+        nutrition_result, workout_program = await asyncio.gather(
             nutrition_task, workout_task,
         )
 
-        # 7. Auto-activate (AI Coach skips manual coach approval)
+        if not workout_program:
+            raise HTTPException(status_code=502, detail="v3 pipeline returned no program")
+
+        # 6b. v3 workout persistence + validation snapshot
+        try:
+            pools_by_day = {
+                spec.day_index: select_candidates_for_session(db, spec, workout_program.profile)
+                for spec in workout_program.split.sessions
+            }
+            v3_report = validate_workout_v3(workout_program, pools_by_day)
+            v3_score = v3_report.score
+        except Exception as _e:
+            v3_score = None
+
+        workout_program_id = save_workout_v3(
+            db, workout_program,
+            coach_user_id=AI_COACH_USER_ID,
+            validation_score=v3_score,
+            is_active=True,   # AI coach skips manual approval
+        )
+
+        # 7. Auto-activate nutrition (workout already active via save_workout_v3)
         nutrition_program_id = nutrition_result.get("program_id")
-        workout_program_id = workout_result.get("program_id")
         if nutrition_program_id:
             cur.execute(
                 "UPDATE nutrition_programs SET is_active = TRUE, updated_at = NOW() WHERE id = %s",
                 (nutrition_program_id,),
-            )
-        if workout_program_id:
-            cur.execute(
-                "UPDATE workout_programs SET is_active = TRUE, updated_at = NOW() WHERE id = %s",
-                (workout_program_id,),
             )
 
         # 8. Cardio (heuristic — no v2 generator yet)
@@ -181,19 +201,15 @@ async def purchase_ai_coach(
         except Exception:
             pass
 
-        # Build summaries from v2 responses
-        week_w = workout_result.get("week", {})
-        active_day_count = sum(1 for d in week_w.values() if isinstance(d, dict) and not d.get("is_rest"))
-        ex_count = sum(
-            len(d.get("exercises", []))
-            for d in week_w.values()
-            if isinstance(d, dict) and not d.get("is_rest")
-        )
+        # Build summary from v3 WeeklyProgram
+        active_day_count = len(workout_program.sessions)
+        ex_count = sum(len(s.exercises) for s in workout_program.sessions)
         workout_summary = {
             "days": active_day_count or len(training_days_short),
             "exercises": ex_count,
-            "rag_candidates": workout_result.get("rag_candidates", []),
-            "library_match": workout_result.get("library_match", {}),
+            "pipeline_version": "v3",
+            "split_id": workout_program.split.split_id,
+            "validation_score": v3_score,
         }
 
         week_n = nutrition_result.get("week", {})
