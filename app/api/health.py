@@ -86,9 +86,13 @@ def send_test_email(to: str = "", key: str = ""):
 
 
 @router.get("/_openai_ping")
-async def openai_ping(model: str = "gpt-4.1-mini", timeout_s: float = 25.0):
+async def openai_ping(model: str = "gpt-4.1-mini", timeout_s: float = 25.0, key: str = ""):
     """Minimal OpenAI roundtrip test — Render→OpenAI baglantisinin sagligini olcer.
-    Kullanici ekranindan curl ile cagrilir; auth gerekmez (gecici diagnostic)."""
+    ADMIN_API_KEY ile korumalı (LAUNCH_AUDIT.md B2 — auth'suz maliyet abuse'u engellenir)."""
+    import os
+    expected = os.getenv("ADMIN_API_KEY", "")
+    if not expected or key != expected:
+        return {"ok": False, "error": "unauthorized"}
     if not OPENAI_API_KEY:
         return {"ok": False, "error": "OPENAI_API_KEY not configured"}
 
@@ -119,9 +123,13 @@ async def openai_ping(model: str = "gpt-4.1-mini", timeout_s: float = 25.0):
 
 
 @router.get("/_openai_stream_test")
-async def openai_stream_test(model: str = "gpt-4.1-mini", timeout_s: float = 110.0, max_tokens: int = 4000):
+async def openai_stream_test(model: str = "gpt-4.1-mini", timeout_s: float = 110.0, max_tokens: int = 4000, key: str = ""):
     """Nutrition senaryosuna yakin: stream=True + response_format=json_object + buyuk output.
-    Gercek bottleneck'i simule eder, kullanici beklemeden test."""
+    ADMIN_API_KEY ile korumalı (LAUNCH_AUDIT.md B2 — attacker-controlled model/max_tokens abuse'u engellenir)."""
+    import os
+    expected = os.getenv("ADMIN_API_KEY", "")
+    if not expected or key != expected:
+        return {"ok": False, "error": "unauthorized"}
     if not OPENAI_API_KEY:
         return {"ok": False, "error": "OPENAI_API_KEY not configured"}
 
