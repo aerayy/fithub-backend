@@ -86,6 +86,7 @@ from app.api.ai_coach import router as ai_coach_router
 from app.api.auth_v2 import router as auth_v2_router
 from app.api.ai_coach_purchase import router as ai_coach_purchase_router
 from app.api.ai_subscription import router as ai_subscription_router
+from app.api.revenuecat_webhook import router as revenuecat_webhook_router
 from app.api.coach.workout_v3 import router as workout_v3_router
 from app.api.superadmin import router as superadmin_router
 
@@ -132,6 +133,7 @@ app.include_router(ws_router)
 app.include_router(ai_coach_router)
 app.include_router(ai_coach_purchase_router)
 app.include_router(ai_subscription_router)
+app.include_router(revenuecat_webhook_router)
 app.include_router(workout_v3_router)
 app.include_router(auth_v2_router)
 app.include_router(superadmin_router)

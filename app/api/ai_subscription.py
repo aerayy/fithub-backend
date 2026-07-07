@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from app.core.security import get_current_user
 from app.core.database import get_db
 from app.services import ai_subscription_service as ai_sub
+from app.services import revenuecat_service as rc
 
 router = APIRouter(prefix="/ai-coach", tags=["ai-coach"])
 logger = logging.getLogger(__name__)
@@ -66,6 +67,29 @@ def mock_subscribe(
     except Exception as e:
         logger.exception("mock_subscribe failed user=%s", user.get("id"))
         raise HTTPException(status_code=500, detail=f"subscribe failed: {e}")
+
+
+@router.post("/subscription/sync")
+def sync_subscription(user=Depends(get_current_user), db=Depends(get_db)):
+    """RevenueCat ile anlık senkron — uygulama satın alma HEMEN sonrasında
+    (ve foreground'a dönünce) çağırır. Webhook'un gelmesini beklemeden,
+    RevenueCat REST API'sinden abonenin güncel entitlement'ını okuyup
+    ai_subscriptions'ı günceller ve tam durum döner.
+
+    RevenueCat yapılandırılmamışsa (secret key yok) 503 döner — uygulama
+    bunu 'henüz canlı değil' olarak ele alır.
+    """
+    if not os.getenv("REVENUECAT_SECRET_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="RevenueCat not configured")
+    try:
+        subscriber = rc.fetch_subscriber(str(user["id"]))
+        rc.sync_from_subscriber(db, user["id"], subscriber)
+        return ai_sub.get_subscription_status(db, user["id"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("sync_subscription failed user=%s", user.get("id"))
+        raise HTTPException(status_code=502, detail=f"sync failed: {e}")
 
 
 @router.post("/subscription/cancel")
