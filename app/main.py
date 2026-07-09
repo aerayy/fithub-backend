@@ -107,6 +107,12 @@ from fastapi.middleware.cors import CORSMiddleware
 cors_origins = os.getenv("CORS_ORIGINS", "")
 origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
 
+# Landing sayfası her zaman izinli — şifre sıfırlama formu (sifre-sifirla.html)
+# backend'e cross-origin POST atıyor; Render CORS_ORIGINS env'ine bağımlı kalmasın.
+for _always_allow in ("https://fithubpoint.com", "https://www.fithubpoint.com"):
+    if _always_allow not in origins:
+        origins.append(_always_allow)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

@@ -2,6 +2,7 @@
 import os
 import re
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,6 +13,8 @@ import bcrypt
 
 from app.core.database import get_db
 from app.core.security import create_token, decode_token, require_role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth-v2"])
 
@@ -138,16 +141,43 @@ def _mask_phone(phone: str) -> str:
 
 
 def _send_otp_sms(phone: str, otp: str):
-    """Send OTP via SMS. TODO: integrate real SMS provider (Twilio/Netgsm)."""
-    print(f'[SMS] OTP {otp} sent to {phone}')
-    # In production: call Twilio/Netgsm API here
+    """Send OTP via SMS. NOT wired — SMS sağlayıcı entegrasyonu yok (Netgsm/Twilio).
+    Signup'ta OTP adımı frontend'de bypass edildiğinden şu an bloklayıcı değil.
+    Telefonla şifre sıfırlama SMS gerektirir; sağlayıcı gelince burası kablolanmalı."""
+    if os.getenv("RENDER_SERVICE_NAME"):
+        logger.warning("SMS OTP requested but no SMS provider configured (phone=%s)", _mask_phone(phone))
+    else:
+        print(f'[SMS] OTP {otp} sent to {phone}')
 
 
 def _send_verification_email(email: str, token: str):
-    """Send email verification link. TODO: integrate email provider."""
+    """E-posta doğrulama magic-link'i (GET /auth/verify-email/{token}) gönder.
+    Resend üzerinden (email_service). RESEND_API_KEY yoksa email_service no-op döner."""
     link = f'https://fithub-backend-jd40.onrender.com/auth/verify-email/{token}'
-    print(f'[EMAIL] Verification link sent to {email}: {link}')
-    # In production: call SendGrid/SES API here
+    try:
+        from app.services.email_service import send_email, render_email_verification
+        send_email(
+            to=email,
+            subject="Fithub Point — E-posta adresini doğrula",
+            html=render_email_verification(link),
+        )
+    except Exception:
+        logger.exception("verification email send failed to=%s", email)
+
+
+def _send_password_reset_email(email: str, token: str):
+    """Şifre sıfırlama e-postası — landing'deki sıfırlama sayfasına yönlendirir
+    (kullanıcı yeni şifre girer, sayfa POST /auth/reset-password çağırır)."""
+    reset_url = f'https://fithubpoint.com/sifre-sifirla.html?token={token}'
+    try:
+        from app.services.email_service import send_email, render_password_reset_email
+        send_email(
+            to=email,
+            subject="Fithub Point — Şifre sıfırlama",
+            html=render_password_reset_email(reset_url),
+        )
+    except Exception:
+        logger.exception("password reset email send failed to=%s", email)
 
 
 # ─── Endpoints ───
@@ -368,7 +398,7 @@ def forgot_password(body: ForgotPasswordRequest, db=Depends(get_db)):
             (token, datetime.utcnow() + timedelta(hours=1), user["id"]),
         )
         db.commit()
-        _send_verification_email(user["email"], token)
+        _send_password_reset_email(user["email"], token)
         return {"ok": True, "message": "E-postanizi kontrol edin"}
 
     elif body.method == 'phone':

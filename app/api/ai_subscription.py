@@ -39,7 +39,7 @@ def get_subscription(user=Depends(get_current_user), db=Depends(get_db)):
         return status
     except Exception as e:
         logger.exception("get_subscription failed user=%s", user.get("id"))
-        raise HTTPException(status_code=500, detail=f"subscription lookup failed: {e}")
+        raise HTTPException(status_code=500, detail="Abonelik durumu alınamadı. Lütfen tekrar dene.")
 
 
 @router.post("/subscription/mock")
@@ -66,7 +66,7 @@ def mock_subscribe(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("mock_subscribe failed user=%s", user.get("id"))
-        raise HTTPException(status_code=500, detail=f"subscribe failed: {e}")
+        raise HTTPException(status_code=500, detail="Abonelik başlatılamadı. Lütfen tekrar dene.")
 
 
 @router.post("/subscription/sync")
@@ -89,7 +89,7 @@ def sync_subscription(user=Depends(get_current_user), db=Depends(get_db)):
         raise
     except Exception as e:
         logger.exception("sync_subscription failed user=%s", user.get("id"))
-        raise HTTPException(status_code=502, detail=f"sync failed: {e}")
+        raise HTTPException(status_code=502, detail="Abonelik senkronu başarısız. Lütfen tekrar dene.")
 
 
 @router.post("/subscription/cancel")
@@ -100,4 +100,4 @@ def cancel_subscription(user=Depends(get_current_user), db=Depends(get_db)):
         return {"ok": True, "canceled": canceled}
     except Exception as e:
         logger.exception("cancel_subscription failed user=%s", user.get("id"))
-        raise HTTPException(status_code=500, detail=f"cancel failed: {e}")
+        raise HTTPException(status_code=500, detail="İptal işlemi başarısız. Lütfen tekrar dene.")

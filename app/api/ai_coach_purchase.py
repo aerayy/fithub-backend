@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from psycopg2.extras import RealDictCursor
 from app.core.database import get_db
 from app.core.security import require_role
+from app.services import ai_subscription_service as ai_sub
 from app.services.badges import check_and_award
 from app.services.workout import pipeline as workout_v3
 from app.services.workout.persistence import save_program as save_workout_v3
@@ -46,6 +47,17 @@ async def purchase_ai_coach(
 
     client_user_id = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
+
+    # GÜVENLİK (AUDIT C1): Aktif AI Coach aboneliği (tier) YOKSA program üretme.
+    # Aksi halde token'lı herhangi bir kullanıcı bu endpoint'i çağırıp OpenAI
+    # maliyetli tam program üretimini + AI koç atamasını BEDAVA alır.
+    # Tier, RevenueCat (webhook/sync) veya mock akışıyla ai_subscriptions'a yazılır.
+    active_tier = ai_sub.get_active_tier(db, client_user_id)
+    if not active_tier:
+        raise HTTPException(
+            status_code=402,
+            detail="Fit AI Koç aboneliğin bulunmuyor. Program oluşturmak için bir plan seç.",
+        )
 
     try:
         # 1. Idempotent — already active?
