@@ -31,6 +31,13 @@ def get_db():
     try:
         yield conn
     finally:
+        # Bağlantıyı havuza iade etmeden önce açık/başarısız transaction'ı temizle.
+        # Aksi halde bir endpoint'te oluşan hata connection'ı "aborted" durumda bırakır
+        # ve aynı connection'ı alan SONRAKİ istekler de patlar (pool poisoning).
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         pool.putconn(conn)
 
 
