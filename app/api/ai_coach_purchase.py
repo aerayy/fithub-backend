@@ -4,16 +4,16 @@ v3 (2026-05-25): Workout uses the new rule-based pipeline (Phase A-E).
 Nutrition stays on v2 (RAG + Constrained AI) since output quality was solid.
 
 Flow:
-  1. Idempotent check / exclusivity check
+  1. Idempotent check (subscription VE aktif program — yoksa onarım) / exclusivity
   2. Onboarding profile load
-  3. Subscription create + assign AI Coach as student's coach (id=60)
+  3. Subscription create-or-reuse + assign AI Coach as student's coach (id=60)
   4. db.commit() so v3 pipeline + v2 nutrition endpoints see the assignment
-  5. Parallel: nutrition v2 + workout v3 pipeline via asyncio.gather (~25-50s)
+  5. Sequential: workout v3 → nutrition v2 (~50-100s; aynı DB bağlantısını
+     paylaştıkları için paralel koşulamazlar)
   6. Persist workout (v3 returns WeeklyProgram, we save_program it ourselves)
   7. Auto-activate (AI Coach skips manual coach approval)
   8. Cardio (heuristic) + conversation + final commit
 """
-import asyncio
 import json
 import os
 import math
@@ -60,13 +60,22 @@ async def purchase_ai_coach(
         )
 
     try:
-        # 1. Idempotent — already active?
+        # 1. Idempotent — "aktif" sayılmak için abonelik kaydı YETMEZ, aktif AI
+        # programı da olmalı. Adım 4'teki commit üretimden önce kalıcılaştığı
+        # için, üretim patlarsa abonelik kalır ama program olmaz; o durumda bu
+        # çağrı üretimi yeniden çalıştırıp yarım durumu onarır.
         cur.execute(
             "SELECT id FROM subscriptions WHERE client_user_id = %s AND coach_user_id = %s AND status = 'active'",
             (client_user_id, AI_COACH_USER_ID),
         )
-        if cur.fetchone():
-            return {"ok": True, "message": "AI Koc zaten aktif", "already_active": True}
+        existing_sub = cur.fetchone()
+        if existing_sub:
+            cur.execute(
+                "SELECT id FROM workout_programs WHERE client_user_id = %s AND coach_user_id = %s AND is_active = TRUE LIMIT 1",
+                (client_user_id, AI_COACH_USER_ID),
+            )
+            if cur.fetchone():
+                return {"ok": True, "message": "AI Koc zaten aktif", "already_active": True}
 
         # 2. Exclusivity — only one active coach at a time
         cur.execute(
@@ -102,14 +111,17 @@ async def purchase_ai_coach(
             "body_focus": ob.get("body_part_focus") or [],
         }
 
-        # 4. Subscription + assigned_coach_id
-        cur.execute(
-            """INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status,
-               started_at, created_at, subscription_ref, program_assigned_at, program_state)
-               VALUES (%s, %s, 'AI Koc', 'active', NOW(), NOW(), %s, NOW(), 'assigned') RETURNING id""",
-            (client_user_id, AI_COACH_USER_ID, f'ai_coach_{client_user_id}_{int(datetime.utcnow().timestamp())}'),
-        )
-        sub_id = cur.fetchone()["id"]
+        # 4. Subscription + assigned_coach_id (onarım akışında mevcut kayıt kullanılır)
+        if existing_sub:
+            sub_id = existing_sub["id"]
+        else:
+            cur.execute(
+                """INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status,
+                   started_at, created_at, subscription_ref, program_assigned_at, program_state)
+                   VALUES (%s, %s, 'AI Koc', 'active', NOW(), NOW(), %s, NOW(), 'assigned') RETURNING id""",
+                (client_user_id, AI_COACH_USER_ID, f'ai_coach_{client_user_id}_{int(datetime.utcnow().timestamp())}'),
+            )
+            sub_id = cur.fetchone()["id"]
         cur.execute(
             "UPDATE clients SET assigned_coach_id = %s WHERE user_id = %s",
             (AI_COACH_USER_ID, client_user_id),
@@ -148,23 +160,22 @@ async def purchase_ai_coach(
         # Fake "coach" current_user so v2 auth check passes (already-set assigned_coach_id=60)
         fake_coach_user = {"id": AI_COACH_USER_ID, "role": "coach", "email": "ai-coach@fithub.internal"}
 
-        # 6. Parallel: nutrition v2 + workout v3 pipeline (~25-50s wall-clock)
-        # v3 pipeline orchestrate çağırırken DB connection'i payload param'larıyla
-        # tutarlı geçiyor; persist=False çünkü save_program'i biz ayrıca
-        # çağıracağız (is_active=True ile, AI coach manuel onaya gerek yok).
-        nutrition_task = generate_nutrition_program_v2(
-            student_user_id=client_user_id,
-            payload=nutrition_payload,
-            db=db,
-            current_user=fake_coach_user,
-        )
-        workout_task = workout_v3.orchestrate(
+        # 6. Sequential: workout v3 → nutrition v2 (~50-100s wall-clock; Flutter
+        # timeout 180s). SIRALI ÇALIŞMAK ZORUNDA: iki generator da AYNI psycopg2
+        # bağlantısını kullanıyor; asyncio.gather ile paralel koşunca await
+        # noktalarında sorgular aynı bağlantıda iç içe geçip aralıklı 500'lere
+        # yol açıyordu. persist=False çünkü save_workout_v3'ü ayrıca çağırıyoruz
+        # (is_active=True ile, AI coach manuel onaya gerek yok).
+        workout_program = await workout_v3.orchestrate(
             conn=db,
             user_id=client_user_id,
             persist=False,
         )
-        nutrition_result, workout_program = await asyncio.gather(
-            nutrition_task, workout_task,
+        nutrition_result = await generate_nutrition_program_v2(
+            student_user_id=client_user_id,
+            payload=nutrition_payload,
+            db=db,
+            current_user=fake_coach_user,
         )
 
         if not workout_program:
