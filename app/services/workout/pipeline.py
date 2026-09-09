@@ -44,9 +44,34 @@ def _fetch_onboarding(conn, user_id: int) -> dict:
         (user_id,),
     )
     row = cur.fetchone()
-    if not row:
-        raise ValueError(f"no onboarding for user_id={user_id}")
-    return dict(row)
+    if row:
+        return dict(row)
+    # client_onboarding satırı olmayan kullanıcı (admin'den açılan hesap, eski
+    # kayıt) satın almada 500 yememeli: clients tablosundaki bilinen alanlardan
+    # düşük çözünürlüklü bir profil kur. build_training_profile'ın tüm
+    # bucket'ları eksik alanda güvenli default üretir.
+    logger.warning(
+        "pipeline: no client_onboarding row for user_id=%s — falling back to clients fields",
+        user_id,
+    )
+    # SELECT * + Python map: clients şeması ortamlar arasında küçük farklar
+    # gösterebiliyor; kolon adına sorguda bağlanmak burada tekrar 500 üretir.
+    cur.execute("SELECT * FROM clients WHERE user_id = %s", (user_id,))
+    c = cur.fetchone()
+    if not c:
+        return {}
+    c = dict(c)
+    return {
+        "gender": c.get("gender"),
+        "your_goal": c.get("goal_type"),
+        "weight_kg": c.get("onboarding_weight_kg") or c.get("weight_kg"),
+        "target_weight_kg": c.get("target_weight_kg"),
+        "how_fit": c.get("activity_level"),
+        # Ekipman bilgisi bilinmiyor: "gym" en geniş egzersiz havuzunu verir;
+        # default'taki "bodyweight" bazı kütüphane durumlarında havuzu boşaltıp
+        # üretimi 502'ye düşürüyor.
+        "workout_place": ["gym"],
+    }
 
 
 async def orchestrate(

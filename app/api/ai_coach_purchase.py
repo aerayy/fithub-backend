@@ -18,7 +18,7 @@ import json
 import os
 import math
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from psycopg2.extras import RealDictCursor
 from app.core.database import get_db
 from app.core.security import require_role
@@ -37,6 +37,7 @@ AI_COACH_USER_ID = 60
 
 @router.post("/purchase")
 async def purchase_ai_coach(
+    request: Request,
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
@@ -171,15 +172,31 @@ async def purchase_ai_coach(
             user_id=client_user_id,
             persist=False,
         )
+
+        # Boş program savunması — nutrition'a girmeden: pipeline nesne döndürse
+        # bile hiç egzersiz yerleştirememişse (aday havuzu 0 vb.) bunu başarı
+        # sayıp kaydetme; boş antrenmanla beslenme üretimine de girme.
+        total_exercises = sum(
+            len(s.exercises) for s in getattr(workout_program, "sessions", []) or []
+        )
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "purchase: v3 result sessions=%d exercises=%d",
+            len(getattr(workout_program, "sessions", []) or []),
+            total_exercises,
+        )
+        if not workout_program or total_exercises == 0:
+            raise HTTPException(
+                status_code=502,
+                detail="Program oluşturulamadı: profiline uygun egzersiz bulunamadı. Lütfen tekrar deneyin.",
+            )
+
         nutrition_result = await generate_nutrition_program_v2(
             student_user_id=client_user_id,
             payload=nutrition_payload,
             db=db,
             current_user=fake_coach_user,
         )
-
-        if not workout_program:
-            raise HTTPException(status_code=502, detail="v3 pipeline returned no program")
 
         # 6b. v3 workout persistence + validation snapshot
         try:
@@ -284,14 +301,21 @@ async def purchase_ai_coach(
         except Exception:
             pass
         raise
-    except Exception:
+    except Exception as e:
         try:
             db.rollback()
         except Exception:
             pass
         import logging
         logging.getLogger(__name__).exception("ai_coach_purchase: unexpected error")
-        raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
+        # Teşhis kapısı: istek ADMIN_API_KEY'i X-Debug-Key ile taşıyorsa hata
+        # sınıfı + kısa mesajı döndür (log erişimi olmadan prod teşhisi için).
+        # Key olmadan her zaman generic mesaj — kullanıcıya iç detay sızmaz.
+        detail = "Bir hata oluştu. Lütfen tekrar deneyin."
+        admin_key = os.getenv("ADMIN_API_KEY", "")
+        if admin_key and request.headers.get("X-Debug-Key") == admin_key:
+            detail = f"{type(e).__name__}: {str(e)[:400]}"
+        raise HTTPException(status_code=500, detail=detail)
 
 
 # ─── Cardio (heuristic; no v2 generator) ───
