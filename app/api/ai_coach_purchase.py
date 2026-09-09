@@ -308,14 +308,24 @@ async def purchase_ai_coach(
             pass
         import logging
         logging.getLogger(__name__).exception("ai_coach_purchase: unexpected error")
+        # OpenAI kota/kredi bitişi: generic "hata" yerine geçici yoğunluk
+        # mesajı — kullanıcı satın almasının yandığını sanmasın (tier durur,
+        # tekrar deneyince üretim çalışır).
+        status = 500
+        detail = "Bir hata oluştu. Lütfen tekrar deneyin."
+        if type(e).__name__ == "RateLimitError" or "insufficient_quota" in str(e):
+            status = 503
+            detail = (
+                "AI koçun şu an çok yoğun. Programın hazırlanamadı — birkaç "
+                "dakika sonra tekrar dene, abonelik hakkın kaybolmaz."
+            )
         # Teşhis kapısı: istek ADMIN_API_KEY'i X-Debug-Key ile taşıyorsa hata
         # sınıfı + kısa mesajı döndür (log erişimi olmadan prod teşhisi için).
-        # Key olmadan her zaman generic mesaj — kullanıcıya iç detay sızmaz.
-        detail = "Bir hata oluştu. Lütfen tekrar deneyin."
+        # Key olmadan asla iç detay sızmaz.
         admin_key = os.getenv("ADMIN_API_KEY", "")
         if admin_key and request.headers.get("X-Debug-Key") == admin_key:
             detail = f"{type(e).__name__}: {str(e)[:400]}"
-        raise HTTPException(status_code=500, detail=detail)
+        raise HTTPException(status_code=status, detail=detail)
 
 
 # ─── Cardio (heuristic; no v2 generator) ───
