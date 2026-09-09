@@ -302,30 +302,120 @@ async def purchase_ai_coach(
             pass
         raise
     except Exception as e:
+        _raise_scrubbed(e, db, request, "ai_coach_purchase")
+
+
+def _raise_scrubbed(e: Exception, db, request: Request, where: str):
+    """Beklenmedik hatayı logla + kullanıcıya güvenli mesajla 500/503 fırlat.
+
+    - RateLimitError/insufficient_quota → 503 "yoğunluk" (satın alma yanmadı).
+    - X-Debug-Key == ADMIN_API_KEY → gerçek hata sınıfı+mesajı (prod teşhisi);
+      key olmadan asla iç detay sızmaz.
+    """
+    try:
+        db.rollback()
+    except Exception:
+        pass
+    import logging
+    logging.getLogger(__name__).exception("%s: unexpected error", where)
+    status = 500
+    detail = "Bir hata oluştu. Lütfen tekrar deneyin."
+    if type(e).__name__ == "RateLimitError" or "insufficient_quota" in str(e):
+        status = 503
+        detail = (
+            "AI koçun şu an çok yoğun. Birkaç dakika sonra tekrar dene — "
+            "abonelik hakkın kaybolmaz."
+        )
+    admin_key = os.getenv("ADMIN_API_KEY", "")
+    if admin_key and request.headers.get("X-Debug-Key") == admin_key:
+        detail = f"{type(e).__name__}: {str(e)[:400]}"
+    raise HTTPException(status_code=status, detail=detail)
+
+
+@router.post("/regenerate-workout")
+async def regenerate_workout(
+    request: Request,
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """Pro/Elite: mevcut AI antrenman programını profile göre yeniden üretir.
+
+    Kota: workout_regen (TIER_LIMITS — Pro 4/ay, Elite sınırsız). Eski aktif
+    AI programı deaktive edilir; yeni 4-haftalık mikrosüvel yazılır.
+    """
+    client_user_id = current_user["id"]
+
+    allowed, reason = ai_sub.check_quota(db, client_user_id, "workout_regen")
+    if not allowed:
+        messages = {
+            "no_subscription": "Program yenileme için aktif bir Fit AI Koç aboneliği gerekli.",
+            "tier_disallowed": "Program yenileme bu pakete dahil değil — Pro veya Elite'e yükseltebilirsin.",
+            "limit_reached": "Bu ayki program yenileme hakkın doldu. Yeni dönemde tekrar deneyebilirsin.",
+        }
+        raise HTTPException(
+            status_code=402,
+            detail={"code": reason, "message": messages.get(reason, messages["no_subscription"])},
+        )
+
+    try:
+        workout_program = await workout_v3.orchestrate(
+            conn=db, user_id=client_user_id, persist=False,
+        )
+        total_exercises = sum(
+            len(s.exercises) for s in getattr(workout_program, "sessions", []) or []
+        )
+        if not workout_program or total_exercises == 0:
+            raise HTTPException(
+                status_code=502,
+                detail="Program oluşturulamadı: profiline uygun egzersiz bulunamadı. Lütfen tekrar deneyin.",
+            )
+
+        try:
+            pools_by_day = {
+                spec.day_index: select_candidates_for_session(db, spec, workout_program.profile)
+                for spec in workout_program.split.sessions
+            }
+            v3_score = validate_workout_v3(workout_program, pools_by_day).score
+        except Exception:
+            v3_score = None
+
+        microcycle = build_microcycle(workout_program)
+
+        cur = db.cursor()
+        cur.execute(
+            "UPDATE workout_programs SET is_active = FALSE, updated_at = NOW() "
+            "WHERE client_user_id = %s AND coach_user_id = %s AND is_active = TRUE",
+            (client_user_id, AI_COACH_USER_ID),
+        )
+        program_id = save_workout_v3(
+            db, workout_program,
+            coach_user_id=AI_COACH_USER_ID,
+            validation_score=v3_score,
+            is_active=True,
+            microcycle=microcycle,
+        )
+        db.commit()
+        ai_sub.increment_quota(db, client_user_id, "workout_regen")
+
+        return {
+            "ok": True,
+            "program_id": program_id,
+            "message": "Programın yenilendi!",
+            "workout_summary": {
+                "days": len(workout_program.sessions),
+                "exercises": total_exercises,
+                "split_id": workout_program.split.split_id,
+                "validation_score": v3_score,
+            },
+        }
+    except HTTPException:
         try:
             db.rollback()
         except Exception:
             pass
-        import logging
-        logging.getLogger(__name__).exception("ai_coach_purchase: unexpected error")
-        # OpenAI kota/kredi bitişi: generic "hata" yerine geçici yoğunluk
-        # mesajı — kullanıcı satın almasının yandığını sanmasın (tier durur,
-        # tekrar deneyince üretim çalışır).
-        status = 500
-        detail = "Bir hata oluştu. Lütfen tekrar deneyin."
-        if type(e).__name__ == "RateLimitError" or "insufficient_quota" in str(e):
-            status = 503
-            detail = (
-                "AI koçun şu an çok yoğun. Programın hazırlanamadı — birkaç "
-                "dakika sonra tekrar dene, abonelik hakkın kaybolmaz."
-            )
-        # Teşhis kapısı: istek ADMIN_API_KEY'i X-Debug-Key ile taşıyorsa hata
-        # sınıfı + kısa mesajı döndür (log erişimi olmadan prod teşhisi için).
-        # Key olmadan asla iç detay sızmaz.
-        admin_key = os.getenv("ADMIN_API_KEY", "")
-        if admin_key and request.headers.get("X-Debug-Key") == admin_key:
-            detail = f"{type(e).__name__}: {str(e)[:400]}"
-        raise HTTPException(status_code=status, detail=detail)
+        raise
+    except Exception as e:
+        _raise_scrubbed(e, db, request, "regenerate_workout")
 
 
 # ─── Cardio (heuristic; no v2 generator) ───

@@ -142,3 +142,94 @@ def get_body_form_status(
         "frequency_days": frequency_days,
         "form_due": form_due,
     }
+
+
+@router.post("/body-form-photos/analyze")
+def analyze_body_form(
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """Pro/Elite: son form fotoğraflarını AI ile değerlendirir (BETA).
+
+    Kota: body_analysis (Pro 10/ay). Tıbbi iddia içermez — genel fitness
+    gözlemi + antrenman odak önerisi (bkz. body_ai_analyzer güvenlik sınırı).
+    """
+    from fastapi import HTTPException
+    from psycopg2.extras import Json
+    from app.services import ai_subscription_service as ai_sub
+    from app.services.body_ai_analyzer import analyze_body_photos
+
+    uid = current_user["id"]
+
+    allowed, reason = ai_sub.check_quota(db, uid, "body_analysis")
+    if not allowed:
+        messages = {
+            "no_subscription": "Vücut form analizi için aktif bir Fit AI Koç aboneliği gerekli.",
+            "tier_disallowed": "Vücut form analizi bu pakete dahil değil — Pro veya Elite'e yükseltebilirsin.",
+            "limit_reached": "Bu ayki vücut form analizi hakkın doldu. Yeni dönemde tekrar deneyebilirsin.",
+        }
+        raise HTTPException(
+            status_code=402,
+            detail={"code": reason, "message": messages.get(reason, messages["no_subscription"])},
+        )
+
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """SELECT DISTINCT ON (angle) id, photo_url
+           FROM body_form_photos
+           WHERE client_user_id = %s
+           ORDER BY angle, created_at DESC""",
+        (uid,),
+    )
+    photos = cur.fetchall()
+    if not photos:
+        raise HTTPException(
+            status_code=404,
+            detail="Önce vücut form fotoğraflarını çekmelisin (Profil → Vücut Formu).",
+        )
+
+    result = analyze_body_photos([p["photo_url"] for p in photos])
+    if not result:
+        raise HTTPException(
+            status_code=503,
+            detail="Analiz şu an yapılamadı. Birkaç dakika sonra tekrar dene — hakkın kaybolmadı.",
+        )
+
+    cur.execute(
+        """INSERT INTO body_form_analyses (client_user_id, photo_ids, analysis)
+           VALUES (%s, %s, %s) RETURNING id, created_at""",
+        (uid, [p["id"] for p in photos], Json(result)),
+    )
+    row = cur.fetchone()
+    db.commit()
+    ai_sub.increment_quota(db, uid, "body_analysis")
+
+    return {
+        "ok": True,
+        "id": row["id"],
+        "created_at": row["created_at"].isoformat(),
+        "photo_count": len(photos),
+        "analysis": result,
+    }
+
+
+@router.get("/body-form-photos/analysis")
+def get_latest_body_analysis(
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """Son AI vücut form değerlendirmesi (yoksa analysis: null)."""
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """SELECT id, analysis, created_at FROM body_form_analyses
+           WHERE client_user_id = %s ORDER BY created_at DESC LIMIT 1""",
+        (current_user["id"],),
+    )
+    row = cur.fetchone()
+    if not row:
+        return {"analysis": None}
+    return {
+        "id": row["id"],
+        "analysis": row["analysis"],
+        "created_at": row["created_at"].isoformat(),
+    }
