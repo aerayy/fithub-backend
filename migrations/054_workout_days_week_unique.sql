@@ -14,6 +14,10 @@ BEGIN;
 ALTER TABLE workout_days
   DROP CONSTRAINT IF EXISTS workout_days_workout_program_id_day_of_week_key;
 
+-- Prod'da aynı ad CONSTRAINT değil bağımsız UNIQUE INDEX olarak yaşıyordu
+-- (tablo elle kurulmuş); DROP CONSTRAINT onu düşürmez. İkisini de kapsa.
+DROP INDEX IF EXISTS workout_days_workout_program_id_day_of_week_key;
+
 ALTER TABLE workout_days
   DROP CONSTRAINT IF EXISTS workout_days_program_week_day_key;
 
