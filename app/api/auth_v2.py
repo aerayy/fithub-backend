@@ -345,7 +345,7 @@ def login(body: LoginRequest, db=Depends(get_db)):
     identifier = (body.identifier or body.email or "").strip()
     # Hesap hedefli şifre denemesi: aynı kimlik için 10 dk'da en fazla 8 deneme
     if identifier:
-        rate_limit.check("login_id", identifier.lower(), 8, 600)
+        rate_limit.check("login_id", identifier.lower(), 8, 600, db=db)
 
     # Detect email vs phone
     if '@' in identifier:
