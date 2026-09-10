@@ -15,6 +15,16 @@ from app.core.database import get_db
 from app.core.security import require_role
 from .routes import router
 
+# Fit AI Koç sanal koç kullanıcısı (kaynak: app/api/ai_coach_purchase.py AI_COACH_USER_ID).
+# AI koç aboneliği mağaza (Google Play / App Store) tarafından faturalandırılır;
+# buradaki insan-koç iptal/iade akışı mağaza faturalandırmasını DURDURMAZ. Bu yüzden
+# AI koç abonelerine bu endpoint'ler kapalıdır (eski uygulama sürümleri için savunma).
+AI_COACH_USER_ID = 60
+STORE_MANAGED_DETAIL = (
+    "Fit AI Koç aboneliğin mağaza (Google Play / App Store) üzerinden faturalandırılıyor. "
+    "Yenilemeyi durdurma, iptal ve iade işlemleri mağazanın abonelik sayfasından yapılır."
+)
+
 
 class CancelRequest(BaseModel):
     type: Literal["soft", "hard"]
@@ -38,7 +48,7 @@ def cancel_subscription(
 
         cur.execute(
             """
-            SELECT id, status, ends_at, started_at
+            SELECT id, status, ends_at, started_at, coach_user_id
             FROM subscriptions
             WHERE client_user_id = %s
               AND status IN ('active', 'pending')
@@ -50,6 +60,8 @@ def cancel_subscription(
         sub = cur.fetchone()
         if not sub:
             raise HTTPException(status_code=404, detail="Aktif abonelik bulunamadı")
+        if sub.get("coach_user_id") == AI_COACH_USER_ID:
+            raise HTTPException(status_code=400, detail=STORE_MANAGED_DETAIL)
 
         sub_id = sub["id"]
 
@@ -132,7 +144,7 @@ def request_refund(
 
         cur.execute(
             """
-            SELECT id, status, started_at, refund_requested_at
+            SELECT id, status, started_at, refund_requested_at, coach_user_id
             FROM subscriptions
             WHERE client_user_id = %s
               AND status = 'active'
@@ -144,6 +156,8 @@ def request_refund(
         sub = cur.fetchone()
         if not sub:
             raise HTTPException(status_code=404, detail="Aktif abonelik bulunamadı")
+        if sub.get("coach_user_id") == AI_COACH_USER_ID:
+            raise HTTPException(status_code=400, detail=STORE_MANAGED_DETAIL)
         if sub["refund_requested_at"]:
             raise HTTPException(status_code=409, detail="İade talebin zaten mevcut, admin onayı bekleniyor.")
         if not sub["started_at"]:

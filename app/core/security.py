@@ -24,9 +24,9 @@ def decode_token(token: str) -> dict:
     try:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
+        raise HTTPException(status_code=401, detail="Oturum süresi doldu, lütfen tekrar giriş yap.")
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Geçersiz oturum, lütfen tekrar giriş yap.")
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
@@ -39,7 +39,7 @@ def get_current_user(
     try:
         user_id = int(user_id_raw)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Geçersiz oturum, lütfen tekrar giriş yap.")
 
     cur = db.cursor()
     cur.execute("SELECT id, email, role FROM users WHERE id = %s", (user_id,))

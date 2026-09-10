@@ -12,13 +12,18 @@ from app.core.database import get_db, _get_pool
 from app.core.security import require_role
 from app.services.badges import check_and_award
 from app.services.meal_ai_analyzer import analyze_meal_photo
+from app.services import ai_subscription_service as ai_sub
 from .routes import router
 
 logger = logging.getLogger(__name__)
 
 
-def _run_ai_analysis(photo_id: int, photo_url: str, meal_label: str):
-    """Background task — fotoğrafı analiz et, sonucu DB'ye yaz."""
+def _run_ai_analysis(photo_id: int, photo_url: str, meal_label: str, user_id: int | None = None):
+    """Background task — fotoğrafı analiz et, sonucu DB'ye yaz.
+
+    user_id verilirse başarılı analizden sonra meal_analysis kotası artırılır
+    (kota kontrolü save_meal_photo'da, çağrılmadan ÖNCE yapılır).
+    """
     pool = _get_pool()
     conn = pool.getconn()
     try:
@@ -41,6 +46,11 @@ def _run_ai_analysis(photo_id: int, photo_url: str, meal_label: str):
             )
             conn.commit()
             logger.info(f"[MEAL_AI] photo_id={photo_id} analizi tamamlandı")
+            if user_id:
+                try:
+                    ai_sub.increment_quota(conn, user_id, "meal_analysis")
+                except Exception as qe:
+                    logger.warning(f"[MEAL_AI] kota artırılamadı user={user_id}: {qe}")
         else:
             cur.execute(
                 "UPDATE meal_photos SET ai_analysis_status = 'failed' WHERE id = %s",
@@ -133,18 +143,48 @@ def save_meal_photo(
     except Exception:
         pass
 
-    # AI analizi — background task, response bloklanmaz (BETA özelliği)
+    # AI analizi — Fit AI Koç kotasına bağlı (Starter 5 / Pro 30 / Elite sınırsız,
+    # abonelik yoksa 0). Fotoğraf her durumda kaydedilir ve koça gider; yalnızca
+    # OpenAI vision analizi kota yoksa ATLANIR (status='skipped') — abonesiz
+    # kullanıcının sınırsız analiz maliyeti üretmesi engellenir.
+    ai_status = "pending"
+    ai_skip_reason = None
     try:
-        background_tasks.add_task(
-            _run_ai_analysis,
-            photo_id=photo_id,
-            photo_url=body.photo_url,
-            meal_label=body.meal_label,
-        )
-    except Exception:
-        pass
+        allowed, reason = ai_sub.check_quota(db, current_user["id"], "meal_analysis")
+    except Exception as e:
+        logger.warning(f"[MEAL_AI] kota kontrolü başarısız, analiz atlanıyor: {e}")
+        allowed, reason = False, "quota_check_failed"
+    if allowed:
+        try:
+            background_tasks.add_task(
+                _run_ai_analysis,
+                photo_id=photo_id,
+                photo_url=body.photo_url,
+                meal_label=body.meal_label,
+                user_id=current_user["id"],
+            )
+        except Exception:
+            pass
+    else:
+        ai_status = "skipped"
+        ai_skip_reason = reason
+        try:
+            cur.execute(
+                "UPDATE meal_photos SET ai_analysis_status = 'skipped' WHERE id = %s",
+                (photo_id,),
+            )
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"[MEAL_AI] skipped durumu yazılamadı photo_id={photo_id}: {e}")
 
-    return {"ok": True, "id": photo_id, "newly_earned": newly_earned}
+    return {
+        "ok": True,
+        "id": photo_id,
+        "newly_earned": newly_earned,
+        "ai_analysis_status": ai_status,
+        "ai_skip_reason": ai_skip_reason,
+    }
 
 
 @router.get("/meal-photos/today")

@@ -10,6 +10,23 @@ from app.schemas.subscriptions import SubscriptionConfirmRequest, SubscriptionCo
 from app.services.badges import check_and_award
 from .routes import router
 import uuid
+import os
+
+
+# Gerçek (insan) koç paketleri: ödeme geçidi (iyzico) henüz yok — mevcut akış
+# ödemesiz "mock" satın alma. Canlıda kullanıcı koçu bedava alamasın diye
+# kapalı; iyzico bağlanınca Render env'de HUMAN_COACH_PURCHASE_ENABLED=1 yapılır.
+HUMAN_COACH_PURCHASE_DISABLED_DETAIL = (
+    "Gerçek koç paketleri çok yakında. Şimdilik Fit AI Koç paketlerini kullanabilirsin."
+)
+
+
+def _require_human_coach_purchase_enabled():
+    if os.getenv("HUMAN_COACH_PURCHASE_ENABLED", "0").strip() != "1":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=HUMAN_COACH_PURCHASE_DISABLED_DETAIL,
+        )
 
 @router.get("/ping")
 def client_ping(current_user=Depends(require_role("client"))):
@@ -26,6 +43,7 @@ def checkout(
     current_user=Depends(require_role("client")),
     db=Depends(get_db)
 ):
+    _require_human_coach_purchase_enabled()
     client_user_id = current_user["id"]
     coach_package_id = request.coach_package_id
 
@@ -244,6 +262,7 @@ def confirm_subscription(
     Idempotent: if subscription already exists for this client_user_id and subscription_ref,
     returns existing record instead of creating duplicate.
     """
+    _require_human_coach_purchase_enabled()
     client_user_id = current_user["id"]
     coach_id = request.coach_id
     plan_id = request.plan_id
