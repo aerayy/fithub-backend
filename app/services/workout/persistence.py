@@ -108,6 +108,36 @@ def save_program(
     return program_id
 
 
+def _default_warmup(session_name: str) -> dict:
+    """Oturum tipine göre standart ısınma (v3 pipeline ısınma üretmiyor; boş
+    bırakılınca uygulamada süresiz/boş "Isınma Akışı" kartı görünüyordu).
+    Flutter kartı {"duration_min": str, "items": [{"name","description"}]} bekler.
+    """
+    n = (session_name or "").lower()
+    base = [
+        {"name": "Hafif kardiyo", "description": "3-5 dk yürüyüş, bisiklet veya ip atlama — nabzı hafifçe yükselt."},
+    ]
+    upper_keys = ("upper", "üst", "push", "pull", "chest", "back", "shoulder", "arm", "göğüs", "sırt", "omuz", "kol")
+    lower_keys = ("lower", "leg", "alt", "bacak", "glute", "kalça")
+    if any(k in n for k in upper_keys):
+        specific = [
+            {"name": "Omuz çevirme + kol daireleri", "description": "Her yöne 10-15 tekrar, kontrollü."},
+            {"name": "Band pull-apart / scapular push-up", "description": "2×15 — omuz kuşağını uyandır."},
+        ]
+    elif any(k in n for k in lower_keys):
+        specific = [
+            {"name": "Kalça açıcı + bacak salınımı", "description": "Her bacak 10-12 tekrar, ileri-geri ve yana."},
+            {"name": "Vücut ağırlığı squat", "description": "2×12 — tam hareket açıklığı, yavaş iniş."},
+        ]
+    else:
+        specific = [
+            {"name": "Dinamik esneme", "description": "Kol daireleri, kalça açıcı, gövde rotasyonu — toplam 3-4 dk."},
+            {"name": "Vücut ağırlığı squat + şınav", "description": "2×10 — tüm vücudu uyandır."},
+        ]
+    ramp = {"name": "İlk hareketin hafif setleri", "description": "Çalışma ağırlığının %40-60'ı ile 1-2 set, 8-10 tekrar."}
+    return {"duration_min": "8", "items": base + specific + [ramp]}
+
+
 def _write_week_rows(*, cur, program_id, week_index, week_program, name_by_id) -> None:
     """Write 7 workout_days rows + their workout_exercises for one week_index."""
     sessions_by_day = {s.day_index: s for s in week_program.sessions}
@@ -147,7 +177,7 @@ def _write_week_rows(*, cur, program_id, week_index, week_program, name_by_id) -
                         "items": items,
                     }
                 ],
-                "warmup": {"items": [], "duration_min": ""},
+                "warmup": _default_warmup(session.session_name),
                 "coach_note": session.session_name,
             }
 
