@@ -13,6 +13,7 @@ import bcrypt
 
 from app.core.database import get_db
 from app.core.security import create_token, decode_token, require_role
+from app.core import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ def _send_password_reset_email(email: str, token: str):
 
 # ─── Endpoints ───
 
-@router.post("/register")
+@router.post("/register", dependencies=[rate_limit.rate_limited("register", 10, 3600)])
 def register(body: RegisterRequest, db=Depends(get_db)):
     """Register new user with OTP + email verification."""
     cur = db.cursor(cursor_factory=RealDictCursor)
@@ -263,7 +264,7 @@ def register(body: RegisterRequest, db=Depends(get_db)):
     }
 
 
-@router.post("/verify-otp")
+@router.post("/verify-otp", dependencies=[rate_limit.rate_limited("verify_otp", 20, 600)])
 def verify_otp(body: VerifyOTPRequest, db=Depends(get_db)):
     """Verify phone OTP."""
     phone = _normalize_phone(body.phone)
@@ -311,7 +312,7 @@ def verify_otp(body: VerifyOTPRequest, db=Depends(get_db)):
     return {"ok": True, "token": token, "message": "Telefon dogrulandi"}
 
 
-@router.post("/resend-otp")
+@router.post("/resend-otp", dependencies=[rate_limit.rate_limited("resend_otp", 5, 600)])
 def resend_otp(body: VerifyOTPRequest, db=Depends(get_db)):
     """Resend OTP. Rate limited: max 5/hour."""
     phone = _normalize_phone(body.phone)
@@ -336,12 +337,15 @@ def resend_otp(body: VerifyOTPRequest, db=Depends(get_db)):
     return {"ok": True, "message": "Yeni kod gonderildi"}
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[rate_limit.rate_limited("login_ip", 30, 600)])
 def login(body: LoginRequest, db=Depends(get_db)):
     """Login with email or phone + password."""
     cur = db.cursor(cursor_factory=RealDictCursor)
     # Flutter sends "email" field, web/admin may send "identifier"
     identifier = (body.identifier or body.email or "").strip()
+    # Hesap hedefli şifre denemesi: aynı kimlik için 10 dk'da en fazla 8 deneme
+    if identifier:
+        rate_limit.check("login_id", identifier.lower(), 8, 600)
 
     # Detect email vs phone
     if '@' in identifier:
@@ -382,7 +386,7 @@ def login(body: LoginRequest, db=Depends(get_db)):
     }
 
 
-@router.post("/forgot-password")
+@router.post("/forgot-password", dependencies=[rate_limit.rate_limited("forgot_pw", 5, 900)])
 def forgot_password(body: ForgotPasswordRequest, db=Depends(get_db)):
     """Step 1: Send reset via email or phone."""
     cur = db.cursor(cursor_factory=RealDictCursor)
@@ -419,7 +423,7 @@ def forgot_password(body: ForgotPasswordRequest, db=Depends(get_db)):
     raise HTTPException(400, "Geçersiz method")
 
 
-@router.post("/reset-password")
+@router.post("/reset-password", dependencies=[rate_limit.rate_limited("reset_pw", 10, 900)])
 def reset_password(body: ResetPasswordRequest, db=Depends(get_db)):
     """Set new password after OTP or email verification."""
     cur = db.cursor(cursor_factory=RealDictCursor)
