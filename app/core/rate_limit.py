@@ -14,6 +14,7 @@ X-Forwarded-For'un ilk adresi, yoksa bağlantı adresi.
 import threading
 import time
 from collections import defaultdict, deque
+from typing import Optional
 
 from fastapi import Depends, HTTPException, Request
 
@@ -69,7 +70,7 @@ RETURNING count
 _db_unavailable_logged = False
 
 
-def allow_db(conn, key: str, limit: int, window_sec: int) -> bool | None:
+def allow_db(conn, key: str, limit: int, window_sec: int) -> Optional[bool]:
     """DB destekli sabit pencere sayacı (migration 057 `rate_limit_buckets`).
 
     Tüm worker'lar aynı sayacı görür. Tablo yoksa / DB hatasında None döner
@@ -81,7 +82,15 @@ def allow_db(conn, key: str, limit: int, window_sec: int) -> bool | None:
         cur.execute(_UPSERT_SQL, {"key": key, "win": window_sec})
         row = cur.fetchone()
         conn.commit()
-        count = row[0] if row else 0
+        # Havuz bağlantıları RealDictCursor kullanıyor → satır dict gelir;
+        # düz cursor'da tuple. İkisini de destekle (row[0] KeyError veriyordu →
+        # sessizce bellek yedeğine düşüyor, DB sayacı hiç çalışmıyordu).
+        if row is None:
+            count = 0
+        elif isinstance(row, dict):
+            count = int(row.get("count", 0))
+        else:
+            count = int(row[0])
         return count <= limit
     except Exception as e:  # tablo yok, bağlantı sorunu vb.
         try:

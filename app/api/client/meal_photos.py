@@ -18,7 +18,7 @@ from .routes import router
 logger = logging.getLogger(__name__)
 
 
-def _run_ai_analysis(photo_id: int, photo_url: str, meal_label: str, user_id: int | None = None):
+def _run_ai_analysis(photo_id: int, photo_url: str, meal_label: str, user_id: Optional[int] = None):
     """Background task — fotoğrafı analiz et, sonucu DB'ye yaz.
 
     user_id verilirse başarılı analizden sonra meal_analysis kotası artırılır
