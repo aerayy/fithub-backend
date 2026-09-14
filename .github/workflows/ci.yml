@@ -1,0 +1,33 @@
+name: CI
+
+# Her push ve PR'da: derleme kontrolü + testler. Deploy Render tarafında
+# (main'e push → otomatik); eski SSH/VPS deploy workflow'u kaldırıldı.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      AUTO_MIGRATE: "0"      # CI'da DB yok; açılış migration'ı kapalı
+      SENTRY_DSN: ""
+      JWT_SECRET: "ci-only-not-a-real-secret"
+      DB_HOST: "127.0.0.1"
+      DB_NAME: "ci"
+      DB_USER: "ci"
+      DB_PASSWORD: "ci"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -r requirements.txt pytest
+      - name: Byte-compile all modules
+        run: python -m compileall -q app
+      - name: Tests
+        run: pytest -q tests
