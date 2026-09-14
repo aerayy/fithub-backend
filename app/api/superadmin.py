@@ -281,3 +281,14 @@ def list_all_subscriptions(
             if r.get(f) and hasattr(r[f], "isoformat"):
                 r[f] = r[f].isoformat()
     return {"subscriptions": rows}
+
+
+@router.get("/ai-usage")
+def ai_usage_summary(
+    days: int = 30,
+    db=Depends(get_db),
+    user=Depends(require_role("superadmin")),
+):
+    """OpenAI token kullanımı özeti (son N gün) + tahmini USD (migration 062)."""
+    from app.services.ai_usage import usage_summary
+    return usage_summary(db, days)

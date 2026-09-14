@@ -2,7 +2,9 @@
 import asyncio
 import logging
 import time
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.core.security import verify_admin_key
 
 from app.core.config import OPENAI_API_KEY
 
@@ -12,26 +14,49 @@ logger = logging.getLogger(__name__)
 
 @router.get("/health")
 def health():
+    """Uptime izleme için: DB'ye gerçekten dokunur. DB yoksa 503 döner ki
+    izleyici 'sağlıklı' yanılgısına düşmesin."""
+    from app.core.database import _get_pool
+    t0 = time.monotonic()
+    pool = None
+    conn = None
+    try:
+        pool = _get_pool()
+        conn = pool.getconn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 AS ok")
+        cur.fetchone()
+        db_ms = int((time.monotonic() - t0) * 1000)
+    except Exception as e:
+        logger.error("health: db check failed: %s", e)
+        raise HTTPException(status_code=503, detail={"status": "degraded", "db": "error"})
+    finally:
+        if pool is not None and conn is not None:
+            try:
+                conn.rollback()
+                pool.putconn(conn)
+            except Exception:
+                pass
+    return {"status": "ok", "db": "ok", "db_ms": db_ms}
+
+
+@router.get("/health/live")
+def health_live():
+    """Süreç ayakta mı (DB'siz). Render/platform liveness için."""
     return {"status": "ok"}
 
 
 @router.get("/_sentry_test")
-def sentry_test(key: str = ""):
+def sentry_test(_=Depends(verify_admin_key)):
     """Sentry'ye intentional exception gönderir. ADMIN_API_KEY ile korumalı."""
     import os
-    expected = os.getenv("ADMIN_API_KEY", "")
-    if not expected or key != expected:
-        return {"ok": False, "error": "unauthorized"}
     raise RuntimeError("sentry_test: intentional crash (ignore in dashboard)")
 
 
 @router.get("/_fcm_status")
-def fcm_status(key: str = ""):
+def fcm_status(_=Depends(verify_admin_key)):
     """FCM kurulum durumu raporu. ADMIN_API_KEY ile korumalı."""
     import os
-    expected = os.getenv("ADMIN_API_KEY", "")
-    if not expected or key != expected:
-        return {"ok": False, "error": "unauthorized"}
     from app.services import push_notification as pn
     pn._init_firebase()
     status = {
@@ -46,12 +71,9 @@ def fcm_status(key: str = ""):
 
 
 @router.get("/_fcm_test")
-def fcm_test(user_id: int = 0, key: str = ""):
+def fcm_test(user_id: int = 0, _=Depends(verify_admin_key)):
     """Verilen user_id'nin tum FCM tokenlerine test push atar."""
     import os
-    expected = os.getenv("ADMIN_API_KEY", "")
-    if not expected or key != expected:
-        return {"ok": False, "error": "unauthorized"}
     if not user_id:
         return {"ok": False, "error": "user_id required"}
     from app.services.push_notification import send_notification, _get_user_tokens
@@ -68,12 +90,9 @@ def fcm_test(user_id: int = 0, key: str = ""):
 
 
 @router.get("/_send_test_email")
-def send_test_email(to: str = "", key: str = ""):
+def send_test_email(to: str = "", _=Depends(verify_admin_key)):
     """Resend bağlantısını test eder. ADMIN_API_KEY ile korumalı."""
     import os
-    expected = os.getenv("ADMIN_API_KEY", "")
-    if not expected or key != expected:
-        return {"ok": False, "error": "unauthorized"}
     if not to or "@" not in to:
         return {"ok": False, "error": "invalid_recipient"}
     from app.services.email_service import send_email, render_welcome_email
@@ -86,13 +105,10 @@ def send_test_email(to: str = "", key: str = ""):
 
 
 @router.get("/_openai_ping")
-async def openai_ping(model: str = "gpt-4.1-mini", timeout_s: float = 25.0, key: str = ""):
+async def openai_ping(model: str = "gpt-4.1-mini", timeout_s: float = 25.0, _=Depends(verify_admin_key)):
     """Minimal OpenAI roundtrip test — Render→OpenAI baglantisinin sagligini olcer.
     ADMIN_API_KEY ile korumalı (LAUNCH_AUDIT.md B2 — auth'suz maliyet abuse'u engellenir)."""
     import os
-    expected = os.getenv("ADMIN_API_KEY", "")
-    if not expected or key != expected:
-        return {"ok": False, "error": "unauthorized"}
     if not OPENAI_API_KEY:
         return {"ok": False, "error": "OPENAI_API_KEY not configured"}
 
@@ -123,13 +139,10 @@ async def openai_ping(model: str = "gpt-4.1-mini", timeout_s: float = 25.0, key:
 
 
 @router.get("/_openai_stream_test")
-async def openai_stream_test(model: str = "gpt-4.1-mini", timeout_s: float = 110.0, max_tokens: int = 4000, key: str = ""):
+async def openai_stream_test(model: str = "gpt-4.1-mini", timeout_s: float = 110.0, max_tokens: int = 4000, _=Depends(verify_admin_key)):
     """Nutrition senaryosuna yakin: stream=True + response_format=json_object + buyuk output.
     ADMIN_API_KEY ile korumalı (LAUNCH_AUDIT.md B2 — attacker-controlled model/max_tokens abuse'u engellenir)."""
     import os
-    expected = os.getenv("ADMIN_API_KEY", "")
-    if not expected or key != expected:
-        return {"ok": False, "error": "unauthorized"}
     if not OPENAI_API_KEY:
         return {"ok": False, "error": "OPENAI_API_KEY not configured"}
 

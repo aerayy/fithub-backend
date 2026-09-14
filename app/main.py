@@ -139,6 +139,47 @@ app.add_middleware(
 )
 
 
+# ---------------------------------------------------------------
+# Güvenlik başlıkları + istek kimliği (X-Request-ID) + genel hata yanıtı
+# ---------------------------------------------------------------
+import uuid as _uuid
+from fastapi import Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+
+@app.middleware("http")
+async def _security_headers_and_request_id(request: _Request, call_next):
+    rid = (request.headers.get("x-request-id") or "").strip()[:64] or _uuid.uuid4().hex[:16]
+    request.state.request_id = rid
+    try:
+        import sentry_sdk as _sentry
+        _sentry.set_tag("request_id", rid)
+    except Exception:
+        pass
+    response = await call_next(request)
+    h = response.headers
+    h["X-Request-ID"] = rid
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Referrer-Policy", "no-referrer")
+    h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.path.startswith("/auth/"):
+        h.setdefault("Cache-Control", "no-store")
+    return response
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: _Request, exc: Exception):
+    # Ham hata metni (pgerror, stack) istemciye sızmasın; Sentry zaten yakalar.
+    rid = getattr(request.state, "request_id", None)
+    logging.getLogger("app").exception("unhandled error path=%s rid=%s", request.url.path, rid)
+    return _JSONResponse(
+        status_code=500,
+        content={"detail": "Sunucu hatası oluştu, lütfen biraz sonra tekrar dene.", "request_id": rid},
+    )
+
+
 # Routers
 app.include_router(health_router)
 app.include_router(auth_router)

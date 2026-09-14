@@ -144,7 +144,10 @@ def get_body_form_status(
     }
 
 
-@router.post("/body-form-photos/analyze")
+from app.core import rate_limit  # noqa: E402
+
+
+@router.post("/body-form-photos/analyze", dependencies=[rate_limit.rate_limited("ai_body", 10, 3600)])
 def analyze_body_form(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),

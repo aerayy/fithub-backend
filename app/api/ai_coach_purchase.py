@@ -31,6 +31,7 @@ from app.services.workout.exercise_selector import select_candidates_for_session
 from app.services.workout.progression import build_microcycle
 
 router = APIRouter(prefix="/ai-coach", tags=["ai-coach"])
+from app.core import rate_limit  # noqa: E402
 
 AI_COACH_USER_ID = 60
 
@@ -332,7 +333,7 @@ def _raise_scrubbed(e: Exception, db, request: Request, where: str):
     raise HTTPException(status_code=status, detail=detail)
 
 
-@router.post("/regenerate-workout")
+@router.post("/regenerate-workout", dependencies=[rate_limit.rate_limited("ai_regen", 10, 3600)])
 async def regenerate_workout(
     request: Request,
     db=Depends(get_db),

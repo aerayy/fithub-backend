@@ -99,6 +99,11 @@ def analyze_meal_photo(photo_url: str, meal_label: Optional[str] = None) -> Opti
         )
 
         content = response.choices[0].message.content
+        try:
+            from app.services.ai_usage import record_usage
+            record_usage("meal_analysis", MODEL, getattr(response, "usage", None))
+        except Exception:
+            pass
         data = json.loads(content)
 
         # Validation — minimum gerekli alanlar

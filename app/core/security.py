@@ -1,4 +1,5 @@
 # app/core/security.py
+import hmac
 import logging
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
@@ -8,6 +9,7 @@ from jose import jwt, JWTError, ExpiredSignatureError
 from app.core.config import JWT_SECRET, JWT_ALGORITHM, ADMIN_API_KEY
 from app.core.database import get_db
 from fastapi import Header
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -78,18 +80,56 @@ def require_role(*roles: str):
         return user
     return _dep
 
+def _admin_key_ok(candidate) -> bool:
+    """Sabit zamanlı karşılaştırma (timing attack'e karşı)."""
+    if not ADMIN_API_KEY or not candidate:
+        return False
+    return hmac.compare_digest(str(candidate), ADMIN_API_KEY)
+
+
 def verify_admin_key(x_admin_key: str = Header(..., alias="X-Admin-Key")):
     """
     Admin API key verification dependency.
     Requires X-Admin-Key header to match ADMIN_API_KEY env var.
     Returns 401 if missing or invalid (never crashes).
     """
-    if not ADMIN_API_KEY or x_admin_key != ADMIN_API_KEY:
+    if not _admin_key_ok(x_admin_key):
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing admin key"
         )
     return True
+
+
+def admin_key_or_superadmin(
+    x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+    authorization: Optional[str] = Header(default=None),
+    db=Depends(get_db),
+):
+    """X-Admin-Key (cron/araçlar) VEYA superadmin JWT (admin paneli) kabul eder.
+
+    Neden: admin paneli superadmin key'i tarayıcı paketine gömüyordu (herkes
+    okuyabiliyordu). Panel artık kendi JWT'siyle gelir; key yalnızca sunucu
+    tarafı araçlar (cron) için kalır.
+    """
+    if x_admin_key is not None:
+        if _admin_key_ok(x_admin_key):
+            return {"via": "admin_key"}
+        raise HTTPException(status_code=401, detail="Invalid or missing admin key")
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        payload = decode_token(token)
+        try:
+            user_id = int(payload.get("sub"))
+        except Exception:
+            raise HTTPException(status_code=401, detail="Geçersiz oturum, lütfen tekrar giriş yap.")
+        cur = db.cursor()
+        cur.execute("SELECT id, role FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        if not row or row["role"] != "superadmin":
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return {"via": "superadmin", "id": row["id"]}
+    raise HTTPException(status_code=401, detail="Invalid or missing admin key")
 
 
 # ── Kalıcı oturum (refresh token) ─────────────────────────────────────

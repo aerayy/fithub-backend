@@ -239,6 +239,12 @@ async def assemble_session(
         "assembler: session=%s done in %.1fs finish=%s usage=%s",
         session.name, dur, finish, getattr(response, "usage", None),
     )
+    try:
+        from app.services.ai_usage import record_usage
+        record_usage("workout_v3_session", _WORKOUT_MODEL, getattr(response, "usage", None),
+                     duration_ms=int(dur * 1000))
+    except Exception:
+        pass
     if finish == "length":
         logger.error("assembler: response truncated (max_tokens)")
         return None

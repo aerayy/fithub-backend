@@ -20,6 +20,11 @@ def _get_pool():
             host=DB_HOST,
             port=DB_PORT,
             cursor_factory=RealDictCursor,
+            connect_timeout=10,
+            application_name="fithub-api",
+            # Kaçak/uzun sorgu havuzu kilitlemesin: 30 sn üstü statement iptal.
+            # Migration'lar kendi bağlantısını kullanır (app/core/migrations.py).
+            options="-c statement_timeout=30000",
         )
     return _pool
 

@@ -84,6 +84,11 @@ def analyze_body_photos(photo_urls: list[str]) -> Optional[dict]:
             max_tokens=500,
         )
         data = json.loads(response.choices[0].message.content)
+        try:
+            from app.services.ai_usage import record_usage
+            record_usage("body_analysis", MODEL, getattr(response, "usage", None))
+        except Exception:
+            pass
 
         if "overall" not in data:
             logger.warning(f"[BODY_AI] Eksik alan: {data}")

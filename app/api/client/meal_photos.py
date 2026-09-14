@@ -79,7 +79,10 @@ class MealPhotoInput(BaseModel):
     is_retake: bool = False
 
 
-@router.post("/meal-photos")
+from app.core import rate_limit  # noqa: E402
+
+
+@router.post("/meal-photos", dependencies=[rate_limit.rate_limited("meal_photo", 30, 3600)])
 def save_meal_photo(
     body: MealPhotoInput,
     background_tasks: BackgroundTasks,

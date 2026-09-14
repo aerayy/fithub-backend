@@ -1,7 +1,7 @@
 """
 Client notifications: unread messages and recent program assignments.
 """
-from fastapi import Depends
+from fastapi import Depends, Query
 
 from app.core.database import get_db
 from app.core.security import require_role
@@ -10,6 +10,8 @@ from .routes import router
 
 @router.get("/notifications")
 def get_client_notifications(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
@@ -27,8 +29,8 @@ def get_client_notifications(
         JOIN users u ON u.id = c.coach_user_id
         WHERE c.client_user_id = %s AND m.sender_type = 'coach' AND m.read_at IS NULL
         ORDER BY m.created_at DESC
-        LIMIT 10
-    """, (client_user_id,))
+        LIMIT %s OFFSET %s
+    """, (client_user_id, limit, offset))
     for r in cur.fetchall() or []:
         notifications.append({
             "type": "message",
@@ -51,7 +53,8 @@ def get_client_notifications(
         FROM nutrition_programs
         WHERE client_user_id = %s AND is_active = TRUE AND created_at > NOW() - INTERVAL '7 days'
         ORDER BY created_at DESC
-    """, (client_user_id, client_user_id, client_user_id))
+        LIMIT %s
+    """, (client_user_id, client_user_id, client_user_id, limit))
     for r in cur.fetchall() or []:
         type_names = {'workout': 'Antrenman', 'cardio': 'Kardiyo', 'nutrition': 'Beslenme'}
         type_label = type_names.get(r['program_type'], 'Program')
@@ -64,5 +67,16 @@ def get_client_notifications(
 
     # Sort all by created_at desc
     notifications.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    notifications = notifications[:limit]
 
-    return {"notifications": notifications, "unread_count": len(notifications)}
+    # Okunmamış mesaj sayısı (sayfalamadan bağımsız gerçek sayı)
+    cur.execute("""
+        SELECT COUNT(*) AS c
+        FROM messages m
+        JOIN conversations c2 ON c2.id = m.conversation_id
+        WHERE c2.client_user_id = %s AND m.sender_type = 'coach' AND m.read_at IS NULL
+    """, (client_user_id,))
+    row = cur.fetchone()
+    unread = int(row["c"]) if row and row.get("c") is not None else len(notifications)
+
+    return {"notifications": notifications, "unread_count": unread, "limit": limit, "offset": offset}

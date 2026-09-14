@@ -1,11 +1,13 @@
 """Auth v2 — complete authentication flow with OTP, email verification, remember me."""
 import os
+import hmac
 import re
 import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import BackgroundTasks
 from pydantic import BaseModel, field_validator
 from typing import Optional
 from psycopg2.extras import RealDictCursor
@@ -14,6 +16,7 @@ import bcrypt
 from app.core.database import get_db
 from app.core.security import create_token, decode_token, require_role
 from app.core import rate_limit
+from app.core.config import COACH_INVITE_CODE
 from app.core.security import issue_refresh_token, refresh_token_hash, REFRESH_TOKEN_DAYS
 
 logger = logging.getLogger(__name__)
@@ -587,6 +590,7 @@ def accept_health_disclaimer(
 
 @router.delete("/me")
 def delete_my_account(
+    background_tasks: BackgroundTasks,
     current_user=Depends(require_role("client")),
     db=Depends(get_db),
 ):
@@ -599,6 +603,23 @@ def delete_my_account(
     """
     user_id = current_user["id"]
     cur = db.cursor()
+
+    # 0. Cloudinary'deki görselleri silmek için URL'leri ÖNCE topla (satırlar
+    #    silinince URL'ler kaybolur). Silme işlemi commit sonrası arka planda.
+    media_urls = []
+    for _sql in (
+        "SELECT profile_photo_url AS u FROM users WHERE id = %s",
+        "SELECT photo_url AS u FROM body_form_photos WHERE client_user_id = %s",
+        "SELECT photo_url AS u FROM meal_photos WHERE client_user_id = %s",
+        "SELECT photo_url AS u FROM activity_log WHERE client_user_id = %s",
+        "SELECT media_url AS u FROM messages WHERE sender_user_id = %s",
+    ):
+        try:
+            cur.execute(_sql, (user_id,))
+            media_urls.extend(r["u"] for r in (cur.fetchall() or []) if r.get("u"))
+        except Exception:
+            db.rollback()
+
     try:
         # 1. Kişisel veri tabloları — hard delete
         personal_data_deletes = [
@@ -718,9 +739,101 @@ def delete_my_account(
         )
 
         db.commit()
+        if media_urls:
+            from app.services.media_cleanup import delete_cloudinary_assets
+            background_tasks.add_task(delete_cloudinary_assets, media_urls)
         return {"ok": True, "message": "Hesabınız ve tüm verileriniz silindi."}
     except Exception as e:
         db.rollback()
         import logging
         logging.getLogger(__name__).exception("delete_my_account failed user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="Hesap silinemedi. Lütfen tekrar deneyin.")
+
+
+# ─── KVKK: veri taşınabilirliği (kendi verini indir) ───
+
+@router.get("/me/export", dependencies=[rate_limit.rate_limited("export", 3, 3600)])
+def export_my_data(
+    current_user=Depends(require_role("client")),
+    db=Depends(get_db),
+):
+    """Kullanıcının kendi verisini JSON olarak döndürür (KVKK m.11 erişim hakkı)."""
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse
+    from app.services.data_export import build_export
+
+    data = build_export(db, current_user["id"])
+    return JSONResponse(
+        content=jsonable_encoder(data),
+        headers={"Content-Disposition": 'attachment; filename="fithub-verilerim.json"'},
+    )
+
+
+# ─── Koç self-signup (admin paneli /signup) ───
+# Neden: panel, POST /admin/coaches'i tarayıcıya gömülü superadmin anahtarıyla
+# çağırıyordu → anahtar herkese açıktı. Bu uç anahtar istemez; rate limit +
+# (varsa) COACH_INVITE_CODE ile korunur, self-rating/is_active alanlarını kabul etmez.
+
+class CoachSignupRequest(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    invite_code: Optional[str] = None
+
+    @field_validator('email')
+    @classmethod
+    def _v_email(cls, v):
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v or ""):
+            raise ValueError('Geçersiz e-posta formatı')
+        return v.lower().strip()
+
+    @field_validator('password')
+    @classmethod
+    def _v_password(cls, v):
+        if len(v or "") < 8:
+            raise ValueError('Şifre en az 8 karakter olmalı')
+        return v
+
+    @field_validator('full_name')
+    @classmethod
+    def _v_name(cls, v):
+        v = (v or "").strip()
+        if len(v) < 2:
+            raise ValueError('İsim en az 2 karakter olmalı')
+        return v[:120]
+
+
+@router.post("/coach-signup", dependencies=[rate_limit.rate_limited("coach_signup", 5, 3600)])
+def coach_signup(body: CoachSignupRequest, db=Depends(get_db)):
+    from app.api.admin import CreateCoachRequest, _create_coach_account
+    from app.core.security import create_token
+
+    if COACH_INVITE_CODE:
+        if not body.invite_code or not hmac.compare_digest(body.invite_code.strip(), COACH_INVITE_CODE):
+            raise HTTPException(status_code=403, detail="Davet kodu geçersiz.")
+
+    try:
+        req = CreateCoachRequest(
+            email=body.email,
+            password=body.password,
+            full_name=body.full_name,
+            bio="",
+            instagram="",
+            photo_url="",
+            price_per_month=0,
+            rating=0,
+            rating_count=0,
+            specialties=[],
+            is_active=True,
+        )
+    except Exception:
+        # CreateCoachRequest EmailStr kullanır (rezerve alan adlarını reddeder)
+        raise HTTPException(status_code=422, detail="Geçersiz e-posta adresi.")
+    created = _create_coach_account(req, db)
+    user_id = created["user_id"]
+    return {
+        "token": create_token(user_id, expiry_days=7),
+        "user_id": user_id,
+        "user_email": body.email,
+        "role": "coach",
+    }

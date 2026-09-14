@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from app.services.ai_usage import record_usage as _record_ai_usage
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
@@ -1628,6 +1629,8 @@ Asıl önemli olan **hangi egzersiz** değil, **kas grubu dağılımının denge
             "workout_v2: ai_done duration=%.1fs finish=%s usage=%s content_chars=%s",
             dur, finish, getattr(response, "usage", None), len(raw_content or ""),
         )
+        _record_ai_usage("workout_v2", "gpt-4.1-mini", getattr(response, "usage", None),
+                         user_id=student_user_id, duration_ms=int(dur * 1000))
 
         if not raw_content:
             raise HTTPException(status_code=502, detail="AI boş yanıt döndürdü")
@@ -2662,6 +2665,8 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
             f"{ttfb:.1f}s" if ttfb is not None else "n/a",
             chunk_count, finish_reason, usage_obj, len(raw_content) if raw_content else 0,
         )
+        _record_ai_usage("nutrition_stream", "gpt-4.1-mini", usage_obj,
+                         user_id=student_user_id, duration_ms=int(_ai_dur * 1000))
 
         if not raw_content:
             logger.error(
@@ -3168,6 +3173,8 @@ Her gün için aşağıdaki sıralamayı **birebir** uygula. Öğün isimleri ve
             "nutrition_v2: ai_done duration=%.1fs finish=%s usage=%s content_chars=%s",
             dur, finish, getattr(response, "usage", None), len(raw_content or ""),
         )
+        _record_ai_usage("nutrition_v2", "gpt-4.1-mini", getattr(response, "usage", None),
+                         user_id=student_user_id, duration_ms=int(dur * 1000))
 
         if not raw_content:
             raise HTTPException(status_code=502, detail="AI boş yanıt döndürdü")

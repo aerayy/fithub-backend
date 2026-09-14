@@ -75,7 +75,11 @@ def parse_product_id(product_id: Optional[str]) -> tuple[Optional[str], str]:
         return PRODUCT_TIER_MAP[product_id]
 
     p = product_id.lower()
-    tier = next((t for t in VALID_TIERS if t in p), None)
+    # Gevşek eşleme YALNIZCA kendi ürün ailemiz için (com.fithubpoint...). Aksi
+    # halde "unknown_product" gibi bir id içindeki "pro" alt dizisi tier verirdi.
+    if not p.startswith("com.fithubpoint"):
+        return (None, "monthly")
+    tier = next((t for t in VALID_TIERS if f".{t}." in p or p.endswith(f".{t}")), None)
     period = "yearly" if ("year" in p or "annual" in p or "annually" in p) else "monthly"
     return (tier, period)
 

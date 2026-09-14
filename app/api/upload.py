@@ -4,6 +4,7 @@ Image upload endpoint using Cloudinary.
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from app.core.security import get_current_user
+from app.core import rate_limit
 from app.core.config import CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
 import cloudinary
 import cloudinary.uploader
@@ -18,6 +19,24 @@ cloudinary.config(
 )
 
 
+_IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a")
+
+
+def _looks_like_image(data: bytes) -> bool:
+    """İçerik tipi istemciden gelir, güvenilmez; ilk baytlara (magic) bak."""
+    if any(data.startswith(m) for m in _IMAGE_MAGIC):
+        return True
+    return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+
+
+async def _read_limited(file: UploadFile, max_bytes: int, label: str) -> bytes:
+    """Dosyayı en fazla max_bytes+1 okur; tamamını belleğe almadan boyutu reddeder."""
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"{label} çok büyük (max {max_bytes // (1024 * 1024)}MB)")
+    return data
+
+
 ALLOWED_FOLDERS = {
     "chat": "fithub/chat",
     "chat-voice": "fithub/chat-voice",
@@ -28,7 +47,7 @@ ALLOWED_FOLDERS = {
 }
 
 
-@router.post("/image")
+@router.post("/image", dependencies=[rate_limit.rate_limited("upload_image", 120, 3600)])
 async def upload_image(
     file: UploadFile = File(...),
     folder: str = Query("chat", description="Target folder: chat, profile, meal, body-form"),
@@ -47,9 +66,9 @@ async def upload_image(
             detail=f"File type {file.content_type} not allowed. Use JPEG, PNG, WebP or GIF.",
         )
 
-    contents = await file.read()
-    if len(contents) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+    contents = await _read_limited(file, 10 * 1024 * 1024, "Görsel")
+    if not _looks_like_image(contents):
+        raise HTTPException(status_code=400, detail="Dosya geçerli bir görsel değil (JPEG, PNG, WebP veya GIF olmalı).")
 
     try:
         result = cloudinary.uploader.upload(
@@ -97,9 +116,7 @@ async def upload_video(
             detail=f"Video tipi desteklenmiyor: {file.content_type}",
         )
 
-    contents = await file.read()
-    if len(contents) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Video çok büyük (max 100MB)")
+    contents = await _read_limited(file, 100 * 1024 * 1024, "Video")
 
     try:
         # Eager: upload anında H.264 varyantı kalıcı olarak üretilir.
@@ -152,9 +169,7 @@ async def upload_voice(
             detail=f"Audio tipi desteklenmiyor: {file.content_type}",
         )
 
-    contents = await file.read()
-    if len(contents) > 10 * 1024 * 1024:  # 10MB max for voice (~10 min @ 128kbps)
-        raise HTTPException(status_code=400, detail="Sesli mesaj cok buyuk (max 10MB)")
+    contents = await _read_limited(file, 10 * 1024 * 1024, "Sesli mesaj")  # ~10 dk @ 128kbps
 
     try:
         result = cloudinary.uploader.upload(

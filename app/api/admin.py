@@ -4,7 +4,7 @@ import bcrypt
 from psycopg2.extras import RealDictCursor
 import psycopg2
 
-from app.core.security import require_role, verify_admin_key
+from app.core.security import require_role, verify_admin_key, admin_key_or_superadmin
 from app.core.database import get_db
 from app.schemas.admin import CreateCoachRequest
 
@@ -244,10 +244,16 @@ def get_student_detail(
 def create_coach(
     req: CreateCoachRequest,
     db=Depends(get_db),
-    _admin_key=Depends(verify_admin_key),
+    _auth=Depends(admin_key_or_superadmin),
 ):
+    """Koç hesabı oluştur — X-Admin-Key (araçlar) veya superadmin JWT (panel)."""
+    return _create_coach_account(req, db)
+
+
+def _create_coach_account(req: CreateCoachRequest, db) -> dict:
     """
-    Create a new coach account.
+    Create a new coach account (users + coaches). /admin/coaches ve
+    /auth/coach-signup ortak kullanır.
     
     This endpoint creates both:
     1. A user record with role="coach"
@@ -349,7 +355,7 @@ def create_coach(
 @router.get("/refunds/pending")
 def list_pending_refunds(
     db=Depends(get_db),
-    _admin_key=Depends(verify_admin_key),
+    _auth=Depends(admin_key_or_superadmin),
 ):
     """
     refund_requested_at set olmuş ama henüz işlenmemiş refund taleplerini listele.
@@ -381,7 +387,7 @@ def list_pending_refunds(
 def approve_refund(
     subscription_id: int,
     db=Depends(get_db),
-    _admin_key=Depends(verify_admin_key),
+    _auth=Depends(admin_key_or_superadmin),
 ):
     """
     Refund talebini onayla — refund_processed_at set edilir.
@@ -411,7 +417,7 @@ def approve_refund(
 @router.post("/maintenance/activate-scheduled-drafts")
 def activate_scheduled_drafts(
     db=Depends(get_db),
-    _admin_key=Depends(verify_admin_key),
+    _auth=Depends(admin_key_or_superadmin),
 ):
     """
     Zamanlanmış taslakları aktif programa dönüştür.
@@ -538,7 +544,7 @@ def activate_scheduled_drafts(
 @router.post("/maintenance/expire-subscriptions")
 def expire_stale_subscriptions(
     db=Depends(get_db),
-    _admin_key=Depends(verify_admin_key),
+    _auth=Depends(admin_key_or_superadmin),
 ):
     """
     Süresi geçmiş (ends_at < NOW) ama hâlâ status='active' olan abonelikleri
