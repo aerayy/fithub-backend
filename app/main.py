@@ -96,6 +96,23 @@ from app.core.database import close_pool
 app = FastAPI()
 
 
+@app.on_event("startup")
+def run_migrations_on_startup():
+    # Bekleyen SQL migration'ları uygula (app/core/migrations.py). Hata →
+    # uygulama açılmaz → Render eski sürümü canlıda tutar (güvenli taraf).
+    from app.core.migrations import run_pending_migrations
+    run_pending_migrations()
+
+
+@app.on_event("startup")
+async def start_ws_fanout_listener():
+    # Çoklu worker'da WebSocket anlık iletim: PostgreSQL LISTEN/NOTIFY yayını
+    # (app/core/websocket_manager.py). Her worker kendi dinleyicisini başlatır.
+    import asyncio as _asyncio
+    from app.core.websocket_manager import manager
+    manager.start_fanout_listener(_asyncio.get_running_loop())
+
+
 @app.on_event("shutdown")
 def shutdown_db_pool():
     close_pool()
