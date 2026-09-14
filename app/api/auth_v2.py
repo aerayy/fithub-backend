@@ -14,6 +14,7 @@ import bcrypt
 from app.core.database import get_db
 from app.core.security import create_token, decode_token, require_role
 from app.core import rate_limit
+from app.core.security import issue_refresh_token, refresh_token_hash, REFRESH_TOKEN_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -254,11 +255,17 @@ def register(body: RegisterRequest, db=Depends(get_db)):
 
     # Generate token for immediate use
     token = create_token(user_id)
+    try:
+        refresh = issue_refresh_token(cur, user_id)
+        db.commit()
+    except Exception:
+        refresh = None
 
     return {
         "ok": True,
         "user_id": user_id,
         "token": token,
+        "refresh_token": refresh,
         "masked_phone": _mask_phone(body.phone),
         "message": "Kayit basarili. Telefonunuza gelen kodu girin.",
     }
@@ -337,6 +344,36 @@ def resend_otp(body: VerifyOTPRequest, db=Depends(get_db)):
     return {"ok": True, "message": "Yeni kod gonderildi"}
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@router.post("/refresh", dependencies=[rate_limit.rate_limited("refresh", 60, 600)])
+def refresh_access_token(body: RefreshRequest, db=Depends(get_db)):
+    """Refresh token ile yeni access token. 30 gün kayan pencere (süre uzatılır,
+    token döndürülmez). Geçersiz/süresi dolmuş → 401 → istemci Login'e döner."""
+    raw = (body.refresh_token or "").strip()
+    if not raw or len(raw) > 512:
+        raise HTTPException(401, "Geçersiz oturum, lütfen tekrar giriş yap.")
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "SELECT id, remember_token_expires_at FROM users WHERE remember_token = %s",
+        (refresh_token_hash(raw),),
+    )
+    user = cur.fetchone()
+    exp = user["remember_token_expires_at"] if user else None
+    # Kolon TIMESTAMP veya TIMESTAMPTZ olabilir (prod'da elle eklendi) — ikisini de karşılaştır
+    now = datetime.now(exp.tzinfo) if (exp is not None and exp.tzinfo is not None) else datetime.utcnow()
+    if not user or not exp or exp < now:
+        raise HTTPException(401, "Oturum süresi doldu, lütfen tekrar giriş yap.")
+    cur.execute(
+        "UPDATE users SET remember_token_expires_at = %s WHERE id = %s",
+        (datetime.utcnow() + timedelta(days=REFRESH_TOKEN_DAYS), user["id"]),
+    )
+    db.commit()
+    return {"token": create_token(user["id"], expiry_days=REFRESH_TOKEN_DAYS), "refresh_token": raw}
+
+
 @router.post("/login", dependencies=[rate_limit.rate_limited("login_ip", 30, 600)])
 def login(body: LoginRequest, db=Depends(get_db)):
     """Login with email or phone + password."""
@@ -365,18 +402,16 @@ def login(body: LoginRequest, db=Depends(get_db)):
     expiry_days = 30 if body.remember_me else 1
     token = create_token(user["id"], expiry_days=expiry_days)
 
-    # Store remember token if requested
+    # Kalıcı oturum: remember_me ise refresh token ver (istemci güvenli
+    # depoda saklar, JWT bitince /auth/refresh ile sessizce yeniler)
+    refresh = None
     if body.remember_me:
-        remember = secrets.token_urlsafe(48)
-        remember_hash = hashlib.sha256(remember.encode()).hexdigest()
-        cur.execute(
-            "UPDATE users SET remember_token = %s, remember_token_expires_at = %s WHERE id = %s",
-            (remember_hash, datetime.utcnow() + timedelta(days=30), user["id"]),
-        )
+        refresh = issue_refresh_token(cur, user["id"])
         db.commit()
 
     return {
         "token": token,
+        "refresh_token": refresh,
         "user": {
             "id": user["id"],
             "email": user["email"],

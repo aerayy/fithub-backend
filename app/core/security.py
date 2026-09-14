@@ -90,3 +90,29 @@ def verify_admin_key(x_admin_key: str = Header(..., alias="X-Admin-Key")):
             detail="Invalid or missing admin key"
         )
     return True
+
+
+# ── Kalıcı oturum (refresh token) ─────────────────────────────────────
+# Access token (JWT) kısa ömürlü; refresh token opak, users.remember_token'da
+# sha256 hash'i tutulur, 30 gün kayan pencere. Login/register/sosyal girişte
+# verilir, /auth/refresh ile yeni JWT alınır. Çıkışta sunucuda silinir.
+import hashlib as _hashlib
+import secrets as _secrets
+from datetime import datetime as _dt, timedelta as _td
+
+REFRESH_TOKEN_DAYS = 30
+
+
+def issue_refresh_token(cur, user_id: int) -> str:
+    """Yeni refresh token üretir, hash'ini users tablosuna yazar, ham değeri döndürür.
+    Çağıran commit etmeli."""
+    raw = _secrets.token_urlsafe(48)
+    cur.execute(
+        "UPDATE users SET remember_token = %s, remember_token_expires_at = %s WHERE id = %s",
+        (_hashlib.sha256(raw.encode()).hexdigest(), _dt.utcnow() + _td(days=REFRESH_TOKEN_DAYS), user_id),
+    )
+    return raw
+
+
+def refresh_token_hash(raw: str) -> str:
+    return _hashlib.sha256(raw.encode()).hexdigest()

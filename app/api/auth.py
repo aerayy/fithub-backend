@@ -15,6 +15,7 @@ from jose.exceptions import JWTError, ExpiredSignatureError
 
 from app.core.database import get_db
 from app.core.security import create_token
+from app.core.security import issue_refresh_token
 from app.schemas.auth import SignUpRequest, LoginRequest, GoogleAuthRequest
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -225,9 +226,15 @@ def google_auth(req: GoogleAuthRequest, db=Depends(get_db)):
         user = dict(new_user)
 
     token = create_token(user["id"])
+    try:
+        refresh = issue_refresh_token(cur, user["id"])
+        db.commit()
+    except Exception:
+        refresh = None
     return {
         "access_token": token,
         "token": token,
+        "refresh_token": refresh,
         "user": {
             "id": user["id"],
             "email": user.get("email"),
@@ -389,9 +396,15 @@ def apple_auth(payload: dict = Body(...), db=Depends(get_db)):
         user = dict(new_user)
 
     token = create_token(user["id"])
+    try:
+        refresh = issue_refresh_token(cur, user["id"])
+        db.commit()
+    except Exception:
+        refresh = None
     return {
         "access_token": token,
         "token": token,
+        "refresh_token": refresh,
         "user": {
             "id": user["id"],
             "email": user.get("email"),
