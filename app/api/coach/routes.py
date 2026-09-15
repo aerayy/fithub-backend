@@ -4048,6 +4048,33 @@ def get_dashboard_summary(
     """, (coach_id, coach_id))
     missing_nutrition = cur.fetchall()
 
+    # 8b) 28. gün akışı: 4 haftalık döngüsü bitmiş / son 3 güne girmiş programlar
+    #     (canlı hesap; cron'a bağımlı değil). Tek haftalık şablonlar hariç.
+    cur.execute("""
+        SELECT
+            u.id AS student_id,
+            COALESCE(o.full_name, u.email) AS full_name,
+            u.profile_photo_url,
+            wp.id AS program_id,
+            wp.title AS program_title,
+            GREATEST(0, w.weeks * 7 - (CURRENT_DATE - wp.created_at::date))::int AS program_days_left,
+            ((CURRENT_DATE - wp.created_at::date) >= w.weeks * 7) AS program_finished
+        FROM workout_programs wp
+        JOIN clients c ON c.user_id = wp.client_user_id AND c.assigned_coach_id = %s
+        JOIN users u ON u.id = wp.client_user_id
+        LEFT JOIN client_onboarding o ON o.user_id = u.id
+        JOIN LATERAL (
+            SELECT COUNT(DISTINCT week_index)::int AS weeks
+            FROM workout_days WHERE workout_program_id = wp.id
+        ) w ON TRUE
+        WHERE wp.coach_user_id = %s
+          AND wp.is_active = TRUE
+          AND w.weeks >= 2
+          AND (CURRENT_DATE - wp.created_at::date) >= w.weeks * 7 - 3
+        ORDER BY program_days_left ASC, u.id
+    """, (coach_id, coach_id))
+    program_ending = cur.fetchall()
+
     # 9) Coach name for greeting
     cur.execute("""
         SELECT COALESCE(u.full_name, u.email) AS coach_name
@@ -4165,6 +4192,7 @@ def get_dashboard_summary(
             "pending_approvals": pending_approvals,
             "active_students": active_students,
             "ending_soon_count": len(ending_soon),
+            "program_ending_count": len(program_ending),
             "monthly_revenue": monthly_revenue,
         },
         "needed": {
@@ -4172,6 +4200,7 @@ def get_dashboard_summary(
             "onboarding_incomplete": onboarding_incomplete,
             "missing_workout": missing_workout,
             "missing_nutrition": missing_nutrition,
+            "program_ending": program_ending,
         },
         "recent_activity": recent_activity,
         "recent_purchases": recent_purchases,

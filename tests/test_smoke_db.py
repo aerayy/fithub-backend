@@ -44,6 +44,18 @@ from app.main import app  # noqa: E402
 @pytest.fixture(scope="module")
 def client():
     with TestClient(app, raise_server_exceptions=False) as c:
+        # Lokal test DB'de art arda koşularda register/login hız sınırı (DB kovası) dolmasın.
+        try:
+            from app.core.database import _get_pool
+            conn = _get_pool().getconn()
+            try:
+                cur = conn.cursor()
+                cur.execute("UPDATE rate_limit_buckets SET count = 0 WHERE key LIKE '%%testclient%%'")
+                conn.commit()
+            finally:
+                _get_pool().putconn(conn)
+        except Exception:
+            pass
         yield c
 
 
@@ -186,11 +198,13 @@ def test_exercise_alternatives_and_swap(client):
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE email = %s", (user["email"],))
         uid = cur.fetchone()["id"]
+        # Kalıp adı koşuya özel: lokal test DB'de önceki koşuların satırları alternatif listesine karışmasın.
+        tag = uuid.uuid4().hex[:6]
         rows = [
-            ("Barbell Bench Press", "horizontal_press", "barbell", ["chest"], 2, "g1"),
-            ("Dumbbell Bench Press", "horizontal_press", "dumbbell", ["chest"], 2, "g2"),
-            ("Machine Chest Press", "horizontal_press", "machine", ["chest"], 1, None),
-            ("Barbell Row", "horizontal_pull", "barbell", ["middle back"], 2, "g4"),
+            ("Barbell Bench Press", f"horizontal_press_{tag}", "barbell", ["chest"], 2, "g1"),
+            ("Dumbbell Bench Press", f"horizontal_press_{tag}", "dumbbell", ["chest"], 2, "g2"),
+            ("Machine Chest Press", f"horizontal_press_{tag}", "machine", ["chest"], 1, None),
+            ("Barbell Row", f"horizontal_pull_{tag}", "barbell", ["middle back"], 2, "g4"),
         ]
         ids = []
         for name, pat, eq, mus, cx, gif in rows:
@@ -217,10 +231,14 @@ def test_exercise_alternatives_and_swap(client):
 
     r = client.get(f"/client/exercise-alternatives?library_id={ids[0]}", headers=h)
     assert r.status_code == 200, r.text
+    # Lokal test DB'de önceki koşulardan kalan aynı isimli satırlar olabilir → bu koşunun id'leriyle süz.
+    def _mine(items):
+        return [a["name"] for a in items if a.get("library_id") in ids]
     alts = r.json()["alternatives"]
-    assert [a["name"] for a in alts] == ["Dumbbell Bench Press", "Machine Chest Press"]  # aynı kalıp; farklı kalıp (row) yok
+    assert _mine(alts) == ["Dumbbell Bench Press", "Machine Chest Press"]  # aynı kalıp; farklı kalıp (row) yok
+    assert ids[0] not in [a.get("library_id") for a in alts]  # kaynağın kendisi listelenmez
     r = client.get(f"/client/exercise-alternatives?library_id={ids[0]}&equipment=machine", headers=h)
-    assert [a["name"] for a in r.json()["alternatives"]] == ["Machine Chest Press"]
+    assert _mine(r.json()["alternatives"]) == ["Machine Chest Press"]
 
     r = client.post("/client/workout-exercises/swap", json={"day_key": "mon", "old_library_id": ids[0], "new_library_id": ids[1]}, headers=h)
     assert r.status_code == 200, r.text
@@ -240,3 +258,147 @@ def test_exercise_alternatives_and_swap(client):
         conn.rollback(); pool.putconn(conn)
     r = client.post("/client/workout-exercises/swap", json={"day_key": "tue", "old_library_id": ids[0], "new_library_id": ids[1]}, headers=h)
     assert r.status_code == 404
+
+
+# ─── 28. gün akışı (program döngüsü) ─────────────────────────────────────────
+
+def _insert_multiweek_program(conn, uid, coach_id, weeks, days_ago, title="Döngü Testi"):
+    import json as _json
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active, created_at, updated_at)
+           VALUES (%s, %s, %s, TRUE, (CURRENT_DATE - %s) + TIME '10:00', NOW()) RETURNING id""",
+        (uid, coach_id, title, days_ago),
+    )
+    pid = cur.fetchone()["id"]
+    payload = {"title": "Gün", "blocks": [{"title": "A", "items": [{"type": "exercise", "name": "Squat", "sets": 3, "reps": "8"}]}]}
+    for w in range(1, weeks + 1):
+        cur.execute(
+            """INSERT INTO workout_days (workout_program_id, day_of_week, order_index, week_index, day_payload, created_at, updated_at)
+               VALUES (%s, 'mon', 0, %s, %s, NOW(), NOW())""",
+            (pid, w, _json.dumps(payload)),
+        )
+    conn.commit()
+    return pid
+
+
+def _user_id(conn, email):
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+    return cur.fetchone()["id"]
+
+
+def _ensure_ai_coach_user(conn):
+    """Prod'da Fit AI Koç users.id=60'tır; boş test DB'sinde FK için oluştur."""
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO users (id, email, role, full_name, created_at, updated_at)
+           VALUES (60, 'ai-coach@fithubpoint-test.com', 'coach', 'Fit AI Koç', NOW(), NOW())
+           ON CONFLICT (id) DO NOTHING"""
+    )
+    cur.execute("SELECT setval('users_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM users), 60))")
+    conn.commit()
+
+
+def test_program_cycle_fields_and_ai_renew_guards(client):
+    from app.core.database import _get_pool
+    from app.services import ai_subscription_service as ai_sub
+    user = _register_user(client)
+    h = {"Authorization": f"Bearer {user['token']}"}
+    pool = _get_pool(); conn = pool.getconn()
+    try:
+        uid = _user_id(conn, user["email"])
+        _ensure_ai_coach_user(conn)
+        assert client.get("/client/workouts/active", headers=h).status_code == 404
+        # abonelik yok → 402
+        r = client.post("/ai-coach/renew-cycle", headers=h)
+        assert r.status_code == 402 and r.json()["detail"]["code"] == "no_subscription"
+        ai_sub.create_mock_subscription(conn, uid, "starter")  # Starter'da da döngü yenileme var
+        # program yok → 404
+        assert client.post("/ai-coach/renew-cycle", headers=h).status_code == 404
+        pid = _insert_multiweek_program(conn, uid, 60, weeks=4, days_ago=10)
+        r = client.get("/client/workouts/active", headers=h)
+        assert r.status_code == 200, r.text
+        p = r.json()["program"]
+        assert p["coach_kind"] == "ai" and p["can_renew"] is False and p["total_weeks"] == 4
+        cyc = p["cycle"]
+        assert cyc["has_cycle_end"] and cyc["day_index"] in (11, 12) and cyc["days_left"] in (17, 18)
+        assert not cyc["ending_soon"] and not cyc["is_finished"] and p["current_week_index"] == 2
+        # bitmemiş döngü → 409
+        r = client.post("/ai-coach/renew-cycle", headers=h)
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "cycle_not_finished"
+        # bitmiş döngü → can_renew, son hafta tekrar, bildirim işareti (arka plan) atılır
+        cur = conn.cursor()
+        cur.execute("UPDATE workout_programs SET created_at = (CURRENT_DATE - 30) + TIME '10:00' WHERE id = %s", (pid,))
+        conn.commit()
+        r = client.get("/client/workouts/active", headers=h)
+        p = r.json()["program"]
+        assert p["cycle"]["is_finished"] and p["cycle"]["days_left"] == 0 and p["can_renew"] is True
+        assert p["current_week_index"] == 4 and r.json()["week"]  # 28. günden sonra 4. hafta
+        # tek haftalık şablon: bitiş yok, yenileme yok
+        cur.execute("UPDATE workout_programs SET is_active = FALSE WHERE id = %s", (pid,)); conn.commit()
+        _insert_multiweek_program(conn, uid, 60, weeks=1, days_ago=90)
+        r = client.get("/client/workouts/active", headers=h)
+        p = r.json()["program"]
+        assert p["cycle"]["has_cycle_end"] is False and p["can_renew"] is False and p["current_week_index"] == 1
+        r = client.post("/ai-coach/renew-cycle", headers=h)
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "no_cycle"
+    finally:
+        pool.putconn(conn)
+
+
+def test_program_cycle_end_coach_side_and_maintenance(client):
+    from app.core.database import _get_pool
+    coach_email = f"smoke-coach-{uuid.uuid4().hex[:8]}@fithubpoint-test.com"
+    r = client.post("/auth/coach-signup", json={"full_name": "Döngü Koçu", "email": coach_email, "password": "Sifre12345"})
+    assert r.status_code == 200, r.text
+    coach_h = {"Authorization": f"Bearer {r.json()['token']}"}
+    user = _register_user(client)
+    student_h = {"Authorization": f"Bearer {user['token']}"}
+    pool = _get_pool(); conn = pool.getconn()
+    try:
+        coach_id = _user_id(conn, coach_email)
+        uid = _user_id(conn, user["email"])
+        cur = conn.cursor()
+        cur.execute("UPDATE clients SET assigned_coach_id = %s WHERE user_id = %s", (coach_id, uid))
+        conn.commit()
+        pid = _insert_multiweek_program(conn, uid, coach_id, weeks=4, days_ago=26)  # 27. gün → son 2 gün
+
+        # Koç panosu: canlı liste + sayaç
+        r = client.get("/coach/dashboard/summary", headers=coach_h)
+        assert r.status_code == 200, r.text
+        ending = r.json()["needed"]["program_ending"]
+        me = next(x for x in ending if x["student_id"] == uid)
+        assert me["program_id"] == pid and me["program_days_left"] in (1, 2) and me["program_finished"] is False
+        assert r.json()["kpi"]["program_ending_count"] >= 1
+        # Öğrenci listesi: program_days_left / program_finished
+        r = client.get("/coach/students/active", headers=coach_h)
+        row = next(x for x in r.json()["students"] if x["student_id"] == uid)
+        assert row["program_days_left"] in (1, 2) and row["program_finished"] is False
+
+        # Bakım: dry-run listeler, gerçek koşu bir kez bildirir, tekrar koşu boş
+        ah = {"X-Admin-Key": os.environ["ADMIN_API_KEY"]}
+        assert client.post("/admin/maintenance/notify-program-endings").status_code == 401
+        r = client.post("/admin/maintenance/notify-program-endings?dry_run=1", headers=ah)
+        assert r.status_code == 200 and r.json()["dry_run"] is True
+        cand = next(c for c in r.json()["candidates"] if c["program_id"] == pid)
+        assert cand["kind"] == "coach" and cand["is_finished"] is False
+        r = client.post("/admin/maintenance/notify-program-endings", headers=ah)
+        assert r.status_code == 200, r.text
+        done = next(n for n in r.json()["notified"] if n["program_id"] == pid)
+        assert done["kind"] == "coach" and done["coach_email_sent"] is False  # Resend kapalı → no-op
+        r = client.post("/admin/maintenance/notify-program-endings", headers=ah)
+        assert pid not in [n["program_id"] for n in r.json()["notified"]]
+        cur.execute("SELECT cycle_end_notified_at FROM workout_programs WHERE id = %s", (pid,))
+        assert cur.fetchone()["cycle_end_notified_at"] is not None
+        cur.execute("SELECT action_type FROM activity_log WHERE client_user_id = %s ORDER BY id DESC LIMIT 1", (uid,))
+        assert cur.fetchone()["action_type"] == "program_cycle_end"
+
+        # Öğrenci tarafı: gerçek koç → yenileme yok, "bitmek üzere"
+        r = client.get("/client/workouts/active", headers=student_h)
+        p = r.json()["program"]
+        assert p["coach_kind"] == "coach" and p["can_renew"] is False and p["cycle"]["ending_soon"]
+        r = client.post("/ai-coach/renew-cycle", headers=student_h)
+        assert r.status_code == 402  # AI aboneliği yok
+    finally:
+        pool.putconn(conn)

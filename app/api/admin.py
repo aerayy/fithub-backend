@@ -541,6 +541,35 @@ def activate_scheduled_drafts(
     }
 
 
+@router.post("/maintenance/notify-program-endings")
+def notify_program_endings(
+    dry_run: bool = False,
+    db=Depends(get_db),
+    _auth=Depends(admin_key_or_superadmin),
+):
+    """
+    28. gün akışı: 4 haftalık döngüsü bitmiş ya da son 3 güne girmiş aktif
+    antrenman programları için program başına BİR kez öğrenciye push, gerçek
+    koça e-posta gönderir (workout_programs.cycle_end_notified_at işareti).
+    Saatlik cron (scripts/cron_maintenance.sh) ile çağrılır.
+
+    dry_run=1 → sadece adayları listeler, hiçbir şey göndermez/işaretlemez.
+    """
+    from app.services import program_cycle
+
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    candidates = program_cycle.select_pending_programs(cur)
+    if dry_run:
+        return {"ok": True, "dry_run": True, "count": len(candidates), "candidates": candidates}
+
+    notified = []
+    for c in candidates:
+        r = program_cycle.notify_cycle_end(c["program_id"])
+        if r:
+            notified.append(r)
+    return {"ok": True, "count": len(notified), "notified": notified}
+
+
 @router.post("/maintenance/expire-subscriptions")
 def expire_stale_subscriptions(
     db=Depends(get_db),

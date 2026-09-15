@@ -138,3 +138,53 @@ def render_email_verification(verification_url: str) -> str:
   </div>
 </body>
 </html>"""
+
+
+def render_program_cycle_end_email(
+    *,
+    coach_name: str,
+    student_name: str,
+    student_id: int,
+    program_title: str,
+    days_left: int,
+    is_finished: bool,
+    admin_url: str,
+) -> str:
+    """Koça: öğrencinin 4 haftalık program döngüsü bitiyor / bitti."""
+    def _esc(s: str) -> str:
+        return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    safe_coach = _esc(coach_name) or "Koç"
+    safe_student = _esc(student_name) or "Öğrenci"
+    safe_title = _esc(program_title) or "Antrenman programı"
+    if is_finished:
+        headline = f"{safe_student} programını tamamladı"
+        lead = (
+            f"<strong>{safe_student}</strong> adlı öğrencinin 4 haftalık antrenman döngüsü "
+            f"(<em>{safe_title}</em>) sona erdi. Yeni programı atanana kadar uygulamada son haftayı "
+            f"tekrar ediyor."
+        )
+    else:
+        gun = "bugün son günü" if days_left <= 1 else f"{days_left} gün içinde bitiyor"
+        headline = f"{safe_student} için program {gun}"
+        lead = (
+            f"<strong>{safe_student}</strong> adlı öğrencinin 4 haftalık antrenman döngüsü "
+            f"(<em>{safe_title}</em>) {gun}. Yeni döngüyü şimdiden hazırlarsan öğrenci ara vermeden devam eder."
+        )
+    link = f"{admin_url}/students/{int(student_id)}"
+    return f"""<!DOCTYPE html>
+<html lang="tr">
+<head><meta charset="UTF-8"><title>{headline}</title></head>
+<body style="font-family: -apple-system, sans-serif; background: #0C0C0E; color: #ECECEC; padding: 32px;">
+  <div style="max-width: 480px; margin: 0 auto; background: #16161A; border-radius: 16px; padding: 32px;">
+    <h1 style="color: #3E9E8E; margin-top: 0; font-size: 22px;">{headline}</h1>
+    <p>Merhaba {safe_coach},</p>
+    <p style="line-height: 1.6;">{lead}</p>
+    <p style="text-align: center; margin: 32px 0;">
+      <a href="{link}" style="background: #3E9E8E; color: #0C0C0E; padding: 14px 28px; border-radius: 10px; text-decoration: none; font-weight: bold;">Öğrenciyi aç ve program ata</a>
+    </p>
+    <p style="color: #888; font-size: 12px;">Bu bildirim her program döngüsü için bir kez gönderilir.</p>
+    <p style="color: #888; font-size: 13px; margin-top: 32px;">— FitHub Ekibi</p>
+  </div>
+</body>
+</html>"""

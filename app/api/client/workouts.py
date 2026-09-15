@@ -19,7 +19,8 @@ def fetch_active_program_with_payload(client_user_id: int, db):
     # Fetch active program
     cur.execute(
         """
-        SELECT id, client_user_id, coach_user_id, title, week_number, is_active, created_at, updated_at
+        SELECT id, client_user_id, coach_user_id, title, week_number, is_active, created_at, updated_at,
+               cycle_end_notified_at
         FROM workout_programs
         WHERE client_user_id = %s AND is_active = TRUE
         ORDER BY created_at DESC
@@ -246,7 +247,6 @@ def get_active_workout_for_client(
         "weeks": { "1": {...}, "2": {...}, "3": {...}, "4": {...} }
     }
     """
-    from datetime import datetime, timezone
     client_user_id = current_user["id"]
 
     try:
@@ -267,14 +267,28 @@ def get_active_workout_for_client(
         for wk, day_rows in days_by_week.items():
             weeks_response[str(wk)] = build_week_response(program_data, day_rows, fallback_gif)
 
-        # Compute "current week" from days since program creation
+        # Döngü durumu (28 gün akışı): "bugün" Istanbul gününe göre, program
+        # başlangıcı created_at'in Istanbul günü. app/services/program_cycle.py
+        from app.services import program_cycle
+
         created_at = program_data.get("created_at")
-        current_week_index = 1
-        if created_at:
-            now = datetime.now(timezone.utc)
-            created_aware = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
-            days_since = (now - created_aware).days
-            current_week_index = min(4, max(1, (days_since // 7) + 1))
+        total_weeks = max(1, len(weeks_response))
+        cycle = program_cycle.compute_cycle(created_at, total_weeks)
+        # Mevcut mikrosüvel haftası: 28. günden sonra son haftada kalır (tekrar).
+        current_week_index = min(total_weeks, max(1, ((cycle["day_index"] - 1) // 7) + 1))
+
+        coach_user_id = program_data.get("coach_user_id")
+        is_ai = coach_user_id == program_cycle.AI_COACH_USER_ID
+        can_renew = bool(is_ai and cycle["is_finished"])
+
+        # Döngü son 3 güne girdi / bitti ve henüz bildirilmediyse: öğrenciye push,
+        # gerçek koça e-posta (program başına bir kez; cron da aynı işareti kullanır).
+        if (
+            cycle["has_cycle_end"]
+            and (cycle["ending_soon"] or cycle["is_finished"])
+            and program_data.get("cycle_end_notified_at") is None
+        ):
+            program_cycle.notify_cycle_end_async(program_data["id"])
 
         # Backward compat: top-level `week` = current week's data
         backward_week = weeks_response.get(str(current_week_index)) or weeks_response.get("1") or {}
@@ -287,7 +301,10 @@ def get_active_workout_for_client(
                 "created_at": program_data.get("created_at"),
                 "updated_at": program_data.get("updated_at"),
                 "current_week_index": current_week_index,
-                "total_weeks": len(weeks_response),
+                "total_weeks": total_weeks,
+                "coach_kind": "ai" if is_ai else "coach",
+                "can_renew": can_renew,
+                "cycle": cycle,
             },
             "week": backward_week,
             "weeks": weeks_response,

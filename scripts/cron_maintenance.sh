@@ -14,18 +14,25 @@ fi
 echo "=== Maintenance run @ $(date -u +'%Y-%m-%dT%H:%M:%SZ') ==="
 
 echo ""
-echo "[1/2] Zamanlanmış taslakları aktive ediyorum..."
+echo "[1/3] Zamanlanmış taslakları aktive ediyorum..."
 curl -fsS -X POST "$BACKEND_URL/admin/maintenance/activate-scheduled-drafts" \
   -H "X-Admin-Key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   || echo "  WARN: activate-scheduled-drafts failed (continuing)"
 echo ""
 
-echo "[2/2] Süresi geçmiş abonelikleri expire ediyorum..."
+echo "[2/3] Süresi geçmiş abonelikleri expire ediyorum..."
 curl -fsS -X POST "$BACKEND_URL/admin/maintenance/expire-subscriptions" \
   -H "X-Admin-Key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   || echo "  WARN: expire-subscriptions failed (continuing)"
+echo ""
+
+echo "[3/3] Döngüsü biten / bitmek üzere olan programları bildiriyorum..."
+curl -fsS -X POST "$BACKEND_URL/admin/maintenance/notify-program-endings" \
+  -H "X-Admin-Key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  || echo "  WARN: notify-program-endings failed (continuing)"
 echo ""
 
 echo "=== Maintenance done @ $(date -u +'%Y-%m-%dT%H:%M:%SZ') ==="

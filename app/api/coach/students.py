@@ -142,6 +142,11 @@ def get_active_students_from_subscriptions(
             s.program_state,
             s.program_assigned_at,
             EXTRACT(DAY FROM s.ends_at - NOW())::int AS days_left,
+            -- 28. gün akışı: aktif çok haftalı programın kalan günü / bitti mi
+            CASE WHEN wpx.weeks >= 2
+                 THEN GREATEST(0, wpx.weeks * 7 - (CURRENT_DATE - wpx.created_at::date))::int
+            END AS program_days_left,
+            COALESCE(wpx.weeks >= 2 AND (CURRENT_DATE - wpx.created_at::date) >= wpx.weeks * 7, FALSE) AS program_finished,
             CASE
                 WHEN s.status = 'active' AND s.ends_at > NOW() AND s.program_state = 'assigned' THEN 'PROGRAM_ASSIGNED'
                 WHEN s.status = 'active' AND s.ends_at > NOW() THEN 'PURCHASED_WAITING'
@@ -160,6 +165,15 @@ def get_active_students_from_subscriptions(
             ORDER BY id DESC
             LIMIT 1
         ) s ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT wp.created_at,
+                   (SELECT COUNT(DISTINCT week_index)::int
+                      FROM workout_days WHERE workout_program_id = wp.id) AS weeks
+            FROM workout_programs wp
+            WHERE wp.client_user_id = u.id AND wp.is_active = TRUE
+            ORDER BY wp.created_at DESC
+            LIMIT 1
+        ) wpx ON TRUE
         WHERE c.assigned_coach_id = %s
         ORDER BY u.id
         """,

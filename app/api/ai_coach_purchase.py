@@ -333,6 +333,60 @@ def _raise_scrubbed(e: Exception, db, request: Request, where: str):
     raise HTTPException(status_code=status, detail=detail)
 
 
+async def _generate_and_activate_ai_workout(db, client_user_id: int) -> dict:
+    """v3 pipeline ile yeni 4 haftalık AI programı üretir; eski aktif AI programını
+    kapatır, yenisini aktif kaydeder ve commit eder. Kota / rate-limit çağıranındır.
+
+    Dönüş: {"program_id", "workout_summary"}. Üretim boşsa 502 fırlatır.
+    """
+    workout_program = await workout_v3.orchestrate(
+        conn=db, user_id=client_user_id, persist=False,
+    )
+    total_exercises = sum(
+        len(s.exercises) for s in getattr(workout_program, "sessions", []) or []
+    )
+    if not workout_program or total_exercises == 0:
+        raise HTTPException(
+            status_code=502,
+            detail="Program oluşturulamadı: profiline uygun egzersiz bulunamadı. Lütfen tekrar deneyin.",
+        )
+
+    try:
+        pools_by_day = {
+            spec.day_index: select_candidates_for_session(db, spec, workout_program.profile)
+            for spec in workout_program.split.sessions
+        }
+        v3_score = validate_workout_v3(workout_program, pools_by_day).score
+    except Exception:
+        v3_score = None
+
+    microcycle = build_microcycle(workout_program)
+
+    cur = db.cursor()
+    cur.execute(
+        "UPDATE workout_programs SET is_active = FALSE, updated_at = NOW() "
+        "WHERE client_user_id = %s AND coach_user_id = %s AND is_active = TRUE",
+        (client_user_id, AI_COACH_USER_ID),
+    )
+    program_id = save_workout_v3(
+        db, workout_program,
+        coach_user_id=AI_COACH_USER_ID,
+        validation_score=v3_score,
+        is_active=True,
+        microcycle=microcycle,
+    )
+    db.commit()
+    return {
+        "program_id": program_id,
+        "workout_summary": {
+            "days": len(workout_program.sessions),
+            "exercises": total_exercises,
+            "split_id": workout_program.split.split_id,
+            "validation_score": v3_score,
+        },
+    }
+
+
 @router.post("/regenerate-workout", dependencies=[rate_limit.rate_limited("ai_regen", 10, 3600)])
 async def regenerate_workout(
     request: Request,
@@ -343,6 +397,7 @@ async def regenerate_workout(
 
     Kota: workout_regen (TIER_LIMITS — Pro 4/ay, Elite sınırsız). Eski aktif
     AI programı deaktive edilir; yeni 4-haftalık mikrosüvel yazılır.
+    Döngü bitince yenileme için /ai-coach/renew-cycle (kota tüketmez).
     """
     client_user_id = current_user["id"]
 
@@ -359,56 +414,9 @@ async def regenerate_workout(
         )
 
     try:
-        workout_program = await workout_v3.orchestrate(
-            conn=db, user_id=client_user_id, persist=False,
-        )
-        total_exercises = sum(
-            len(s.exercises) for s in getattr(workout_program, "sessions", []) or []
-        )
-        if not workout_program or total_exercises == 0:
-            raise HTTPException(
-                status_code=502,
-                detail="Program oluşturulamadı: profiline uygun egzersiz bulunamadı. Lütfen tekrar deneyin.",
-            )
-
-        try:
-            pools_by_day = {
-                spec.day_index: select_candidates_for_session(db, spec, workout_program.profile)
-                for spec in workout_program.split.sessions
-            }
-            v3_score = validate_workout_v3(workout_program, pools_by_day).score
-        except Exception:
-            v3_score = None
-
-        microcycle = build_microcycle(workout_program)
-
-        cur = db.cursor()
-        cur.execute(
-            "UPDATE workout_programs SET is_active = FALSE, updated_at = NOW() "
-            "WHERE client_user_id = %s AND coach_user_id = %s AND is_active = TRUE",
-            (client_user_id, AI_COACH_USER_ID),
-        )
-        program_id = save_workout_v3(
-            db, workout_program,
-            coach_user_id=AI_COACH_USER_ID,
-            validation_score=v3_score,
-            is_active=True,
-            microcycle=microcycle,
-        )
-        db.commit()
+        result = await _generate_and_activate_ai_workout(db, client_user_id)
         ai_sub.increment_quota(db, client_user_id, "workout_regen")
-
-        return {
-            "ok": True,
-            "program_id": program_id,
-            "message": "Programın yenilendi!",
-            "workout_summary": {
-                "days": len(workout_program.sessions),
-                "exercises": total_exercises,
-                "split_id": workout_program.split.split_id,
-                "validation_score": v3_score,
-            },
-        }
+        return {"ok": True, "message": "Programın yenilendi!", **result}
     except HTTPException:
         try:
             db.rollback()
@@ -417,6 +425,78 @@ async def regenerate_workout(
         raise
     except Exception as e:
         _raise_scrubbed(e, db, request, "regenerate_workout")
+
+
+@router.post("/renew-cycle", dependencies=[rate_limit.rate_limited("ai_regen", 10, 3600)])
+async def renew_cycle(
+    request: Request,
+    db=Depends(get_db),
+    current_user=Depends(require_role("client")),
+):
+    """28 günlük döngü bitince yeni 4 haftalık AI programı üretir (28. gün akışı).
+
+    Kota TÜKETMEZ (Starter dahil): döngü yenileme aboneliğin doğal parçasıdır;
+    workout_regen kotası "beğenmedim, baştan üret" içindir. Şartlar: aktif
+    Fit AI Koç aboneliği + aktif çok haftalı AI programı + döngü bitmiş
+    (program_cycle.compute_cycle → is_finished). Aksi halde 402 / 404 / 409.
+    """
+    from app.services import program_cycle
+
+    client_user_id = current_user["id"]
+    if not ai_sub.get_active_tier(db, client_user_id):
+        raise HTTPException(
+            status_code=402,
+            detail={"code": "no_subscription", "message": "Yeni döngü için aktif bir Fit AI Koç aboneliği gerekli."},
+        )
+
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """SELECT id, created_at FROM workout_programs
+           WHERE client_user_id = %s AND coach_user_id = %s AND is_active = TRUE
+           ORDER BY created_at DESC LIMIT 1""",
+        (client_user_id, AI_COACH_USER_ID),
+    )
+    prog = cur.fetchone()
+    if not prog:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "no_program", "message": "Aktif bir AI antrenman programın yok."},
+        )
+    cycle = program_cycle.compute_cycle(prog["created_at"], program_cycle.program_weeks(cur, prog["id"]))
+    if not cycle["has_cycle_end"]:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "no_cycle", "message": "Bu program haftalık şablon; yenilemek için Programı Yenile'yi kullan."},
+        )
+    if not cycle["is_finished"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "cycle_not_finished",
+                "message": f"Mevcut döngün henüz bitmedi; {cycle['days_left']} gün kaldı. Bitince yeni döngünü oluşturabilirsin.",
+                "days_left": cycle["days_left"],
+            },
+        )
+
+    try:
+        result = await _generate_and_activate_ai_workout(db, client_user_id)
+        try:
+            from app.services.activity_log import log_activity
+            log_activity(
+                client_user_id, AI_COACH_USER_ID, "ai_cycle_renewed",
+                "Yeni AI döngüsü oluşturuldu", f"program #{result['program_id']}",
+            )
+        except Exception:
+            pass
+        return {"ok": True, "message": "Yeni 4 haftalık döngün hazır!", **result}
+    except HTTPException:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        _raise_scrubbed(e, db, request, "renew_cycle")
 
 
 # ─── Cardio (heuristic; no v2 generator) ───
