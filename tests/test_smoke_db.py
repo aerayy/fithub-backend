@@ -198,13 +198,14 @@ def test_exercise_alternatives_and_swap(client):
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE email = %s", (user["email"],))
         uid = cur.fetchone()["id"]
-        # Kalıp adı koşuya özel: lokal test DB'de önceki koşuların satırları alternatif listesine karışmasın.
+        # Kas adı koşuya özel: lokal test DB'de önceki koşuların satırları alternatif listesine
+        # karışmasın (movement_pattern v3 pipeline enum'unda kalmalı, o yüzden kalıp değişmez).
         tag = uuid.uuid4().hex[:6]
         rows = [
-            ("Barbell Bench Press", f"horizontal_press_{tag}", "barbell", ["chest"], 2, "g1"),
-            ("Dumbbell Bench Press", f"horizontal_press_{tag}", "dumbbell", ["chest"], 2, "g2"),
-            ("Machine Chest Press", f"horizontal_press_{tag}", "machine", ["chest"], 1, None),
-            ("Barbell Row", f"horizontal_pull_{tag}", "barbell", ["middle back"], 2, "g4"),
+            ("Barbell Bench Press", "horizontal_press", "barbell", [f"chest-{tag}"], 2, "g1"),
+            ("Dumbbell Bench Press", "horizontal_press", "dumbbell", [f"chest-{tag}"], 2, "g2"),
+            ("Machine Chest Press", "horizontal_press", "machine", [f"chest-{tag}"], 1, None),
+            ("Barbell Row", "horizontal_pull", "barbell", [f"middle back-{tag}"], 2, "g4"),
         ]
         ids = []
         for name, pat, eq, mus, cx, gif in rows:
@@ -402,3 +403,22 @@ def test_program_cycle_end_coach_side_and_maintenance(client):
         assert r.status_code == 402  # AI aboneliği yok
     finally:
         pool.putconn(conn)
+
+
+def test_push_token_lookup_returns_registered_tokens(client):
+    """Havuz RealDictCursor → eski row[0] KeyError veriyordu; token'lı kullanıcıda push hiç gitmiyordu."""
+    from app.services.push_notification import _get_user_tokens, _remove_token
+    from app.core.database import _get_pool
+    user = _register_user(client)
+    h = {"Authorization": f"Bearer {user['token']}"}
+    tok = f"smoke-fcm-{uuid.uuid4().hex}"
+    r = client.post("/client/fcm-token", json={"fcm_token": tok, "platform": "android"}, headers=h)
+    assert r.status_code == 200, r.text
+    pool = _get_pool(); conn = pool.getconn()
+    try:
+        uid = _user_id(conn, user["email"])
+    finally:
+        pool.putconn(conn)
+    assert tok in _get_user_tokens(uid)
+    _remove_token(tok)
+    assert tok not in _get_user_tokens(uid)

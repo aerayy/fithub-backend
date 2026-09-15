@@ -7,7 +7,6 @@ Sends notifications to client devices when:
 """
 import os
 import json
-from app.core.database import get_db
 
 try:
     import firebase_admin
@@ -46,14 +45,23 @@ def _init_firebase():
 
 
 def _get_user_tokens(user_id: int) -> list[str]:
-    """Get all FCM tokens for a user (uses connection pool)."""
+    """Get all FCM tokens for a user (uses connection pool).
+
+    Havuz RealDictCursor döndürür (satır = dict); eski `row[0]` erişimi KeyError
+    veriyor ve token'ı olan HER kullanıcıda push sessizce başarısız oluyordu.
+    """
     from app.core.database import _get_pool
     pool = _get_pool()
     conn = pool.getconn()
     try:
         cur = conn.cursor()
         cur.execute("SELECT fcm_token FROM fcm_tokens WHERE user_id = %s", (user_id,))
-        return [row[0] for row in cur.fetchall()]
+        tokens = []
+        for row in cur.fetchall() or []:
+            tok = row["fcm_token"] if hasattr(row, "keys") else row[0]
+            if tok:
+                tokens.append(tok)
+        return tokens
     finally:
         pool.putconn(conn)
 
@@ -86,14 +94,25 @@ def send_notification(user_id: int, title: str, body: str, data: dict = None):
 
 
 def _remove_token(token: str):
-    """Remove invalid token from DB."""
-    conn = get_db()
+    """Remove invalid (unregistered) token from DB — havuz bağlantısıyla.
+
+    Eski sürüm get_db() generator'ını bağlantı sanıyordu (AttributeError).
+    """
+    from app.core.database import _get_pool
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM fcm_tokens WHERE fcm_token = %s", (token,))
         conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f'[FCM] token cleanup error: {e}')
     finally:
-        conn.close()
+        pool.putconn(conn)
 
 
 # ─── Convenience functions for specific notification types ───
@@ -101,19 +120,19 @@ def _remove_token(token: str):
 def notify_program_assigned(client_user_id: int, program_type: str = "workout"):
     """Notify client that a new program was assigned."""
     titles = {
-        "workout": "Yeni Antrenman Programi",
-        "nutrition": "Yeni Beslenme Programi",
-        "cardio": "Yeni Kardiyo Programi",
+        "workout": "Yeni Antrenman Programı",
+        "nutrition": "Yeni Beslenme Programı",
+        "cardio": "Yeni Kardiyo Programı",
     }
     bodies = {
-        "workout": "Kocunuz yeni bir antrenman programi hazirladi!",
-        "nutrition": "Kocunuz yeni bir beslenme programi hazirladi!",
-        "cardio": "Kocunuz yeni bir kardiyo programi hazirladi!",
+        "workout": "Koçunuz yeni bir antrenman programı hazırladı!",
+        "nutrition": "Koçunuz yeni bir beslenme programı hazırladı!",
+        "cardio": "Koçunuz yeni bir kardiyo programı hazırladı!",
     }
     send_notification(
         client_user_id,
         titles.get(program_type, "Yeni Program"),
-        bodies.get(program_type, "Kocunuz yeni bir program hazirladi!"),
+        bodies.get(program_type, "Koçunuz yeni bir program hazırladı!"),
         {"type": "program_assigned", "program_type": program_type},
     )
 
@@ -122,8 +141,8 @@ def notify_program_updated(client_user_id: int, program_type: str = "workout"):
     """Notify client that their program was updated."""
     send_notification(
         client_user_id,
-        "Program Guncellendi",
-        f"{'Antrenman' if program_type == 'workout' else 'Beslenme'} programiniz guncellendi.",
+        "Program Güncellendi",
+        f"{'Antrenman' if program_type == 'workout' else 'Beslenme'} programınız güncellendi.",
         {"type": "program_updated", "program_type": program_type},
     )
 
@@ -140,7 +159,7 @@ def notify_message_to(recipient_user_id: int, sender_name: str, preview: str, co
     body:  mesaj on izlemesi (100 karakter)
     data:  type=new_message, conversation_id (varsa) — Flutter app navigate ederken kullanir
     """
-    body = preview[:100] if preview else "Yeni bir mesajiniz var"
+    body = preview[:100] if preview else "Yeni bir mesajınız var"
     payload = {"type": "new_message"}
     if conversation_id is not None:
         payload["conversation_id"] = str(conversation_id)
