@@ -147,3 +147,26 @@ def test_delete_account_then_login_fails(client, user):
     assert r.status_code == 200, r.text
     r = client.post("/auth/login", json={"identifier": user["email"], "password": user["password"]})
     assert r.status_code in (401, 404, 429)
+
+
+def test_workout_set_logs_and_history(client, user):
+    h = {"Authorization": f"Bearer {user['token']}"}
+    body = {"exercise_name": "Bench Press", "library_id": 42, "day_key": "mon",
+            "sets": [{"set_index": 1, "weight_kg": 60, "reps": 8}, {"set_index": 2, "weight_kg": 62.5, "reps": 6}]}
+    r = client.put("/client/workout-sets", json=body, headers=h)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["saved"] == 2 and j["exercise_key"] == "lib:42" and j["pr"] is None  # ilk oturum: rekor yok
+    # dün için daha hafif bir oturum ekle → bugünkü oturum rekor olmalı
+    r = client.put("/client/workout-sets", json={**body, "session_date": "2020-01-01",
+                                                 "sets": [{"set_index": 1, "weight_kg": 50, "reps": 8}]}, headers=h)
+    assert r.status_code == 200 and r.json()["saved"] == 1
+    r = client.put("/client/workout-sets", json={**body, "sets": [{"set_index": 3, "weight_kg": 65, "reps": 5}]}, headers=h)
+    assert r.status_code == 200 and r.json()["pr"] is not None and r.json()["pr"]["weight_kg"] == 65
+    r = client.get("/client/workout-sets/history?library_id=42", headers=h)
+    assert r.status_code == 200, r.text
+    hist = r.json()
+    assert len(hist["today"]) == 3 and hist["last"]["date"] == "2020-01-01"
+    assert hist["best"]["est_1rm"] == 76.0 and len(hist["sessions"]) == 2  # Epley: 60×8 > 65×5
+    r = client.put("/client/workout-sets", json={"sets": []}, headers=h)
+    assert r.status_code == 422
