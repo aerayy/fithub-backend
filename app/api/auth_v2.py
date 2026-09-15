@@ -588,6 +588,23 @@ def accept_health_disclaimer(
 
 # ─── Account Deletion (Apple Guideline 5.1.1(v) + KVKK) ───
 
+def _try_exec(cur, sql: str, params: tuple) -> bool:
+    """Toleranslı DELETE: tablo/kolon yoksa SAVEPOINT'e dönüp devam eder.
+
+    Neden: 'except Exception: pass' transaction'ı aborted bırakıyordu; sonraki
+    tüm ifadeler InFailedSqlTransaction ile düşüyor, hesap silme 500 veriyordu
+    (temiz kurulumda coach_reviews yokken smoke test yakaladı).
+    """
+    cur.execute("SAVEPOINT del_sp")
+    try:
+        cur.execute(sql, params)
+        cur.execute("RELEASE SAVEPOINT del_sp")
+        return True
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT del_sp")
+        return False
+
+
 @router.delete("/me")
 def delete_my_account(
     background_tasks: BackgroundTasks,
@@ -639,76 +656,51 @@ def delete_my_account(
             "DELETE FROM workout_program_drafts WHERE client_user_id = %s",
         ]
         # workout_sessions (varsa)
-        try:
-            cur.execute("DELETE FROM workout_sessions WHERE user_id = %s", (user_id,))
-        except Exception:
-            pass
+        _try_exec(cur, "DELETE FROM workout_sessions WHERE user_id = %s", (user_id,))
 
         for sql in personal_data_deletes:
-            try:
-                cur.execute(sql, (user_id,))
-            except Exception:
-                # Tablo yoksa veya kolon eksikse atla, log ve devam
-                pass
+            _try_exec(cur, sql, (user_id,))  # tablo/kolon yoksa atla, transaction bozulmaz
 
         # 2. Cascade: nutrition + workout + cardio programlar (alt tablolarla)
-        cur.execute(
+        _try_exec(cur,
             "DELETE FROM nutrition_meals WHERE nutrition_program_id IN "
             "(SELECT id FROM nutrition_programs WHERE client_user_id = %s)",
             (user_id,),
         )
-        cur.execute("DELETE FROM nutrition_programs WHERE client_user_id = %s", (user_id,))
+        _try_exec(cur, "DELETE FROM nutrition_programs WHERE client_user_id = %s", (user_id,))
 
         # workout_programs varsa
-        try:
-            cur.execute(
-                "DELETE FROM workout_exercises WHERE workout_day_id IN "
-                "(SELECT id FROM workout_days WHERE workout_program_id IN "
-                "(SELECT id FROM workout_programs WHERE client_user_id = %s))",
-                (user_id,),
-            )
-            cur.execute(
-                "DELETE FROM workout_days WHERE workout_program_id IN "
-                "(SELECT id FROM workout_programs WHERE client_user_id = %s)",
-                (user_id,),
-            )
-            cur.execute("DELETE FROM workout_programs WHERE client_user_id = %s", (user_id,))
-        except Exception:
-            pass
+        _try_exec(cur,
+            "DELETE FROM workout_exercises WHERE workout_day_id IN "
+            "(SELECT id FROM workout_days WHERE workout_program_id IN "
+            "(SELECT id FROM workout_programs WHERE client_user_id = %s))",
+            (user_id,),
+        )
+        _try_exec(cur,
+            "DELETE FROM workout_days WHERE workout_program_id IN "
+            "(SELECT id FROM workout_programs WHERE client_user_id = %s)",
+            (user_id,),
+        )
+        _try_exec(cur, "DELETE FROM workout_programs WHERE client_user_id = %s", (user_id,))
 
         # cardio
-        try:
-            cur.execute(
-                "DELETE FROM cardio_sessions WHERE cardio_program_id IN "
-                "(SELECT id FROM cardio_programs WHERE client_user_id = %s)",
-                (user_id,),
-            )
-            cur.execute("DELETE FROM cardio_programs WHERE client_user_id = %s", (user_id,))
-        except Exception:
-            pass
+        _try_exec(cur,
+            "DELETE FROM cardio_sessions WHERE cardio_program_id IN "
+            "(SELECT id FROM cardio_programs WHERE client_user_id = %s)",
+            (user_id,),
+        )
+        _try_exec(cur, "DELETE FROM cardio_programs WHERE client_user_id = %s", (user_id,))
 
         # 3. Mesajlaşma + abonelik + değerlendirme — hard delete (NOT NULL FK'ler için)
-        cur.execute(
+        _try_exec(cur,
             "DELETE FROM messages WHERE conversation_id IN "
             "(SELECT id FROM conversations WHERE client_user_id = %s OR coach_user_id = %s)",
             (user_id, user_id),
         )
-        cur.execute(
-            "DELETE FROM messages WHERE sender_user_id = %s",
-            (user_id,),
-        )
-        cur.execute(
-            "DELETE FROM conversations WHERE client_user_id = %s",
-            (user_id,),
-        )
-        cur.execute(
-            "DELETE FROM subscriptions WHERE client_user_id = %s",
-            (user_id,),
-        )
-        try:
-            cur.execute("DELETE FROM coach_reviews WHERE client_user_id = %s", (user_id,))
-        except Exception:
-            pass
+        _try_exec(cur, "DELETE FROM messages WHERE sender_user_id = %s", (user_id,))
+        _try_exec(cur, "DELETE FROM conversations WHERE client_user_id = %s", (user_id,))
+        _try_exec(cur, "DELETE FROM subscriptions WHERE client_user_id = %s", (user_id,))
+        _try_exec(cur, "DELETE FROM coach_reviews WHERE client_user_id = %s", (user_id,))
 
         # 4. clients tablosundaki satır (assigned_coach_id ile koça referans)
         cur.execute("DELETE FROM clients WHERE user_id = %s", (user_id,))

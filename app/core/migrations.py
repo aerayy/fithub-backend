@@ -90,6 +90,14 @@ def run_pending_migrations() -> dict:
             done = {r[0] for r in cur.fetchall()}
             pending = [p for p in files if p.name not in done]
             for p in pending:
+                if p.name.startswith("000_"):
+                    # Başlangıç şeması: yalnızca boş DB'de çalışır. Kurulu DB'de (prod)
+                    # tablolar zaten var → çalıştırmadan uygulanmış say.
+                    cur.execute("SELECT to_regclass('public.users')")
+                    if cur.fetchone()[0] is not None:
+                        cur.execute("INSERT INTO schema_migrations (filename) VALUES (%s) ON CONFLICT DO NOTHING", (p.name,))
+                        logger.info("migrations: %s atlandı (DB zaten kurulu), kayda alındı", p.name)
+                        continue
                 sql = p.read_text(encoding="utf-8")
                 logger.info("migrations: uygulanıyor %s", p.name)
                 cur.execute(sql)
