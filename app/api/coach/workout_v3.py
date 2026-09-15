@@ -74,25 +74,43 @@ async def generate_workout_v3(
     except Exception as e:
         logger.warning("v3: validation snapshot skipped (%s)", e)
 
-    # Persist
+    # 4 haftalık mikrosüvel (Fit AI Koç ile aynı yol: build_microcycle → 28 gün satırı)
+    try:
+        from app.services.workout.progression import build_microcycle
+        microcycle = build_microcycle(program)
+    except Exception as e:
+        logger.warning("v3: microcycle build failed, single week persisted (%s)", e)
+        microcycle = None
+
+    # Persist — taslak; koç inceleyip "Programı Ata" ile aktifleştirir
     try:
         program_id = save_program(
             db, program,
             coach_user_id=coach_id,
+            title="AI Antrenman Programı (4 hafta)" if microcycle else "AI Antrenman Programı",
             validation_score=score,
             training_profile_id=training_profile_id,
-            is_active=False,   # draft — coach reviews before assigning
+            is_active=False,
+            microcycle=microcycle,
         )
     except Exception as e:
         logger.exception("v3: persistence failed")
         raise HTTPException(status_code=500, detail=f"persist error: {e}")
 
+    # Admin editörü için hafta bazlı yapı (GET .../workout-programs/latest ile aynı biçim)
+    from app.services.workout.coach_program_writer import load_program_weeks
+    weeks, flat_week, total_weeks = load_program_weeks(cur, program_id)
+
     return {
         "ok": True,
         "program_id": program_id,
         "pipeline_version": "v3",
+        "generated_by": "ai",
         "validation_score": score,
         "split_id": program.split.split_id,
         "session_count": len(program.sessions),
         "training_profile_id": training_profile_id,
+        "total_weeks": total_weeks,
+        "week": flat_week,
+        "weeks": weeks,
     }

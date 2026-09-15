@@ -205,20 +205,17 @@ def assign_workout_draft(
     payload = draft["payload"]
     draft_name = draft["name"]
 
-    # Deactivate current active programs
-    cur.execute(
-        "UPDATE workout_programs SET is_active = FALSE WHERE client_user_id = %s AND is_active = TRUE",
-        (student_id,),
+    # Aktif program olarak yaz (workout_days + workout_exercises; tek/çok haftalı).
+    # Eski sürüm var olmayan program_name/day_payload kolonlarına INSERT atıyordu (500).
+    from app.services.workout.coach_program_writer import create_program_from_payload
+    program_id, _weeks = create_program_from_payload(
+        cur,
+        client_user_id=student_id,
+        coach_user_id=coach_id,
+        title=(draft_name or "Coach Workout Program")[:120],
+        payload=payload,
+        is_active=True,
     )
-
-    # Insert as active program
-    from psycopg2.extras import Json
-    cur.execute(
-        """INSERT INTO workout_programs (client_user_id, coach_user_id, program_name, day_payload, is_active, created_at)
-           VALUES (%s, %s, %s, %s, TRUE, NOW()) RETURNING id""",
-        (student_id, coach_id, draft_name, Json(payload)),
-    )
-    program_id = cur.fetchone()["id"]
 
     # Update subscription: ilk program assignında started_at + ends_at set edilir
     # (öğrencinin paketi program atandığı anda başlar, satın alma anında değil)
@@ -380,20 +377,17 @@ def assign_nutrition_draft(
     payload = draft["payload"]
     draft_name = draft["name"]
 
-    # Deactivate current
-    cur.execute(
-        "UPDATE nutrition_programs SET is_active = FALSE WHERE client_user_id = %s AND is_active = TRUE",
-        (student_id,),
+    # Aktif beslenme programı olarak yaz (nutrition_programs + nutrition_meals).
+    # Eski sürüm var olmayan program_name/plan_payload kolonlarına INSERT atıyordu (500).
+    from app.services.nutrition_program_writer import create_nutrition_program_from_payload
+    program_id = create_nutrition_program_from_payload(
+        cur,
+        client_user_id=student_id,
+        coach_user_id=coach_id,
+        title=(draft_name or "Coach Nutrition Program")[:120],
+        payload=payload,
+        is_active=True,
     )
-
-    # Insert as active
-    from psycopg2.extras import Json
-    cur.execute(
-        """INSERT INTO nutrition_programs (client_user_id, coach_user_id, program_name, plan_payload, is_active, created_at)
-           VALUES (%s, %s, %s, %s, TRUE, NOW()) RETURNING id""",
-        (student_id, coach_id, draft_name, Json(payload)),
-    )
-    program_id = cur.fetchone()["id"]
 
     # Update subscription: nutrition program ilk atandığında da sayaç başlar
     cur.execute(

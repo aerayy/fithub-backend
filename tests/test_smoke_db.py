@@ -422,3 +422,101 @@ def test_push_token_lookup_returns_registered_tokens(client):
     assert tok in _get_user_tokens(uid)
     _remove_token(tok)
     assert tok not in _get_user_tokens(uid)
+
+
+# ─── Koç: çok haftalı program, taslak atama, v3 üretim koruması ─────────────
+
+def _coach_and_student(client):
+    """Yeni koç + ona atanmış yeni öğrenci; (coach_h, student_h, coach_id, uid)."""
+    from app.core.database import _get_pool
+    coach_email = f"smoke-coach-{uuid.uuid4().hex[:8]}@fithubpoint-test.com"
+    r = client.post("/auth/coach-signup", json={"full_name": "Program Koçu", "email": coach_email, "password": "Sifre12345"})
+    assert r.status_code == 200, r.text
+    coach_h = {"Authorization": f"Bearer {r.json()['token']}"}
+    user = _register_user(client)
+    student_h = {"Authorization": f"Bearer {user['token']}"}
+    pool = _get_pool(); conn = pool.getconn()
+    try:
+        coach_id = _user_id(conn, coach_email); uid = _user_id(conn, user["email"])
+        cur = conn.cursor()
+        cur.execute("UPDATE clients SET assigned_coach_id = %s WHERE user_id = %s", (coach_id, uid))
+        conn.commit()
+    finally:
+        pool.putconn(conn)
+    return coach_h, student_h, coach_id, uid
+
+
+def _day(title, *names):
+    return {"title": title, "kcal": "", "coach_note": "", "warmup": {"duration_min": "5", "items": []},
+            "blocks": [{"title": "Ana Blok", "items": [{"type": "exercise", "name": n, "sets": 3, "reps": "10", "notes": ""} for n in names]}]}
+
+
+def test_coach_multiweek_program_save_latest_assign(client):
+    coach_h, student_h, coach_id, uid = _coach_and_student(client)
+    sid = uid
+    # Tek haftalık kayıt (eski biçim) hâlâ çalışır
+    r = client.post(f"/coach/students/{sid}/workout-programs", json={"week": {"mon": _day("Upper", "Push-up")}}, headers=coach_h)
+    assert r.status_code == 200 and r.json()["total_weeks"] == 1, r.text
+    # İki haftalık kayıt (admin hafta sekmeleri)
+    weeks = {"1": {"mon": _day("Upper A", "Push-up", "Row"), "thu": _day("Lower A", "Squat")},
+             "2": {"mon": _day("Upper B", "Dip"), "thu": _day("Lower B", "Lunge")}}
+    r = client.post(f"/coach/students/{sid}/workout-programs", json={"weeks": weeks, "title": "İki Hafta"}, headers=coach_h)
+    assert r.status_code == 200 and r.json()["total_weeks"] == 2, r.text
+    pid = r.json()["program_id"]
+    r = client.get(f"/coach/students/{sid}/workout-programs/latest", headers=coach_h)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["program_id"] == pid and j["total_weeks"] == 2 and j["is_active"] is False and j["title"] == "İki Hafta"
+    assert j["weeks"]["2"]["thu"]["title"] == "Lower B" and j["weeks"]["1"]["mon"]["blocks"][0]["items"][1]["name"] == "Row"
+    # Düz liste kütüphane eşleşmesiyle kanonik ada çözülür (test DB'de bulanık eşleşme) → sadece sayı
+    assert len(j["week"]["mon"]) == 2 and j["weeks"]["1"]["tue"] is None
+    # Ata → öğrenci tarafında 2 haftalık döngü (14 gün)
+    r = client.post(f"/coach/students/{sid}/workout-programs/assign", headers=coach_h)
+    assert r.status_code == 200, r.text
+    r = client.get("/client/workouts/active", headers=student_h)
+    assert r.status_code == 200, r.text
+    p = r.json()["program"]
+    assert p["id"] == pid and p["total_weeks"] == 2 and p["coach_kind"] == "coach"
+    assert p["cycle"]["has_cycle_end"] and p["cycle"]["total_days"] == 14 and p["cycle"]["day_index"] == 1
+    assert r.json()["weeks"]["2"]["mon"]["title"] == "Upper B"
+    # v3 üretimi: atanmamış öğrenci → 403 (pipeline'a hiç girmez)
+    other = _register_user(client)
+    from app.core.database import _get_pool
+    pool = _get_pool(); conn = pool.getconn()
+    try:
+        other_id = _user_id(conn, other["email"])
+    finally:
+        pool.putconn(conn)
+    r = client.post(f"/coach/students/{other_id}/workout-programs/generate-v3", headers=coach_h)
+    assert r.status_code == 403
+
+
+def test_coach_drafts_assign_writes_real_rows(client):
+    """Taslak atama eskiden var olmayan kolonlara INSERT atıp 500 veriyordu."""
+    coach_h, student_h, coach_id, uid = _coach_and_student(client)
+    sid = uid
+    payload = {"mon": _day("Taslak Günü", "Plank"), "wed": _day("Orta", "Squat")}
+    r = client.post(f"/coach/students/{sid}/workout-drafts", json={"name": "Taslak A", "payload": payload}, headers=coach_h)
+    assert r.status_code == 200, r.text
+    draft_id = r.json()["draft"]["id"]
+    r = client.post(f"/coach/students/{sid}/workout-drafts/{draft_id}/assign", headers=coach_h)
+    assert r.status_code == 200, r.text
+    pid = r.json()["program_id"]
+    r = client.get("/client/workouts/active", headers=student_h)
+    assert r.status_code == 200 and r.json()["program"]["id"] == pid
+    assert r.json()["week"]["wed"]["title"] == "Orta" and r.json()["program"]["title"] == "Taslak A"
+    # Çok haftalı taslak payload'ı da kabul edilir
+    r = client.post(f"/coach/students/{sid}/workout-drafts", json={"name": "Taslak B", "payload": {"weeks": {"1": {"mon": _day("W1", "Row")}, "2": {"mon": _day("W2", "Dip")}}}}, headers=coach_h)
+    assert r.status_code == 200, r.text
+    r = client.post(f"/coach/students/{sid}/workout-drafts/{r.json()['draft']['id']}/assign", headers=coach_h)
+    assert r.status_code == 200, r.text
+    r = client.get("/client/workouts/active", headers=student_h)
+    assert r.json()["program"]["total_weeks"] == 2 and r.json()["weeks"]["2"]["mon"]["title"] == "W2"
+    # Beslenme taslağı atama
+    meals = {"mon": [{"time": "08:00", "items": [{"name": "Yulaf", "amount": "60 g"}]}, {"time": "13:00", "items": [{"name": "Tavuk", "amount": "150 g"}]}]}
+    r = client.post(f"/coach/students/{sid}/nutrition-drafts", json={"name": "Beslenme A", "payload": {"week": meals, "supplements": ["Kreatin"]}}, headers=coach_h)
+    assert r.status_code == 200, r.text
+    r = client.post(f"/coach/students/{sid}/nutrition-drafts/{r.json()['draft']['id']}/assign", headers=coach_h)
+    assert r.status_code == 200, r.text
+    r = client.get("/client/nutrition/active", headers=student_h)
+    assert r.status_code == 200, r.text

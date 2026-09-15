@@ -456,18 +456,17 @@ def activate_scheduled_drafts(
             skipped.append({"type": "workout", "draft_id": d["id"], "reason": "no_active_sub_or_unassigned"})
             continue
 
-        # Eski aktif programları deaktif et
-        cur.execute(
-            "UPDATE workout_programs SET is_active = FALSE WHERE client_user_id = %s AND is_active = TRUE",
-            (d["client_user_id"],),
+        # Yeni aktif program (eski aktifler kapatılır) — ortak yazıcı, tek/çok haftalı.
+        # Eski sürüm var olmayan program_name/day_payload kolonlarına INSERT atıyordu.
+        from app.services.workout.coach_program_writer import create_program_from_payload
+        program_id, _weeks = create_program_from_payload(
+            cur,
+            client_user_id=d["client_user_id"],
+            coach_user_id=d["coach_user_id"],
+            title=(d["name"] or "Coach Workout Program")[:120],
+            payload=d["payload"],
+            is_active=True,
         )
-        # Yeni aktif program
-        cur.execute(
-            """INSERT INTO workout_programs (client_user_id, coach_user_id, program_name, day_payload, is_active, created_at)
-               VALUES (%s, %s, %s, %s, TRUE, NOW()) RETURNING id""",
-            (d["client_user_id"], d["coach_user_id"], d["name"], Json(d["payload"])),
-        )
-        program_id = cur.fetchone()["id"]
         # Subscription started_at/ends_at trigger
         cur.execute(
             """UPDATE subscriptions s
@@ -511,16 +510,17 @@ def activate_scheduled_drafts(
             skipped.append({"type": "nutrition", "draft_id": d["id"], "reason": "no_active_sub_or_unassigned"})
             continue
 
-        cur.execute(
-            "UPDATE nutrition_programs SET is_active = FALSE WHERE client_user_id = %s AND is_active = TRUE",
-            (d["client_user_id"],),
+        # Ortak beslenme yazıcısı (nutrition_programs + nutrition_meals); eski sürüm
+        # var olmayan program_name/plan_payload kolonlarına INSERT atıyordu.
+        from app.services.nutrition_program_writer import create_nutrition_program_from_payload
+        program_id = create_nutrition_program_from_payload(
+            cur,
+            client_user_id=d["client_user_id"],
+            coach_user_id=d["coach_user_id"],
+            title=(d["name"] or "Coach Nutrition Program")[:120],
+            payload=d["payload"],
+            is_active=True,
         )
-        cur.execute(
-            """INSERT INTO nutrition_programs (client_user_id, coach_user_id, program_name, plan_payload, is_active, created_at)
-               VALUES (%s, %s, %s, %s, TRUE, NOW()) RETURNING id""",
-            (d["client_user_id"], d["coach_user_id"], d["name"], Json(d["payload"])),
-        )
-        program_id = cur.fetchone()["id"]
         cur.execute(
             "UPDATE nutrition_program_drafts SET activated_at = NOW() WHERE id = %s",
             (d["id"],),

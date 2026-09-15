@@ -570,9 +570,17 @@ def save_workout_program(
     db=Depends(get_db),
     current_user=Depends(require_role("coach")),
 ):
+    """Koç programını TASLAK olarak kaydeder (is_active=false); atama ayrı adım.
+
+    Payload: {"week": {...}} (tek hafta) veya {"weeks": {"1": {...}, "2": {...}, ...}}
+    (admin editör hafta sekmeleri, en fazla 4 hafta → uygulamada 28 günlük döngü).
+    Yazım app/services/workout/coach_program_writer.py ile taslak atama ve
+    zamanlanmış taslak aktivasyonuyla ortaktır.
+    """
+    from app.services.workout.coach_program_writer import create_program_from_payload
+
     coach_id = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
-
     cur.execute(
         "SELECT 1 FROM clients WHERE user_id=%s AND assigned_coach_id=%s",
         (student_user_id, coach_id),
@@ -583,87 +591,20 @@ def save_workout_program(
     try:
         # Create program as DRAFT (is_active=false)
         # Do NOT deactivate existing active program - that happens only on "Assign Program"
-        cur.execute(
-            """
-            INSERT INTO workout_programs (client_user_id, coach_user_id, title, is_active)
-            VALUES (%s, %s, %s, FALSE)
-            RETURNING id
-            """,
-            (student_user_id, coach_id, "Coach Workout Program"),
+        title = (payload.get("title") if isinstance(payload, dict) else None) or "Coach Workout Program"
+        program_id, total_weeks = create_program_from_payload(
+            cur,
+            client_user_id=student_user_id,
+            coach_user_id=coach_id,
+            title=str(title)[:120],
+            payload=payload,
+            is_active=False,
         )
-        program_id = _fetchone_id(cur.fetchone())
-
-        week = payload.get("week", {}) or {}
-        day_order = 1
-
-        for day_key, day_value in week.items():
-            if not day_value:
-                continue
-
-            # Detect format: old (array) vs new (object)
-            is_old_format = isinstance(day_value, list)
-            is_new_format = isinstance(day_value, dict)
-
-            if not (is_old_format or is_new_format):
-                continue
-
-            # Prepare day_payload and exercises list
-            day_payload_json = None
-            exercises_to_insert = []
-
-            if is_new_format:
-                # New format: save day_payload JSONB
-                day_payload_json = json.dumps(day_value)
-                # Flatten to exercises for compatibility
-                exercises_to_insert = _flatten_day_to_exercises(day_value)
-            else:
-                # Old format: array of exercises
-                exercises_to_insert = day_value
-                # Optionally generate minimal day_payload for backward compatibility
-                # (We'll leave it NULL to maintain old behavior)
-
-            # Insert workout_day
-            cur.execute(
-                """
-                INSERT INTO workout_days (workout_program_id, day_of_week, order_index, day_payload)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-                """,
-                (program_id, day_key, day_order, day_payload_json),
-            )
-            workout_day_id = _fetchone_id(cur.fetchone())
-
-            # Insert exercises (for both old and new format)
-            for ex_order, ex in enumerate(exercises_to_insert, start=1):
-                if isinstance(ex, dict):
-                    ex_name = ex.get("name") or ""
-                    matched = _match_exercise_library(cur, ex_name)
-                    lib_id = matched["id"] if matched else None
-                    resolved_name = matched["canonical_name"] if matched else ex_name
-                    cur.execute(
-                        """
-                        INSERT INTO workout_exercises
-                        (workout_day_id, exercise_name, sets, reps, notes, order_index, exercise_library_id)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            workout_day_id,
-                            resolved_name,
-                            ex.get("sets"),
-                            ex.get("reps") or "",
-                            ex.get("notes") or "",
-                            ex_order,
-                            lib_id,
-                        ),
-                    )
-
-            day_order += 1
-
         db.commit()
-        return {"ok": True, "program_id": program_id}
-
+        return {"ok": True, "program_id": program_id, "total_weeks": total_weeks}
     except Exception as e:
         db.rollback()
+        logging.getLogger(__name__).exception("save_workout_program failed")
         raise HTTPException(status_code=500, detail="Bir hata oluştu. Lütfen tekrar deneyin.")
 
 
@@ -1873,12 +1814,15 @@ def get_latest_workout_program(
 ):
     """
     Get the latest saved workout program for a student (even if draft/not active).
-    Returns UI-friendly flat structure for admin panel editor.
-    
-    Example curl:
-    curl -X GET "http://localhost:8000/coach/students/36/workout-programs/latest" \
-      -H "Authorization: Bearer <coach_token>"
+
+    Dönüş (admin panel editörü):
+      week         1. haftanın düz biçimi {mon: [exercise, ...]}  — geriye uyumluluk
+      weeks        {"1": {mon: day_payload|None, ...}, "2": ...}  — yapısal, hafta bazlı
+      total_weeks  1 (tek haftalık şablon) .. 4 (v3 mikrosüvel / çok haftalı koç programı)
+      pipeline_version, validation_score, title, generated_by ("ai" | None)
     """
+    from app.services.workout.coach_program_writer import load_program_weeks
+
     coach_id = current_user["id"]
     cur = db.cursor(cursor_factory=RealDictCursor)
 
@@ -1893,7 +1837,8 @@ def get_latest_workout_program(
     # Get latest program (by created_at DESC, then id DESC)
     cur.execute(
         """
-        SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at
+        SELECT id, client_user_id, coach_user_id, title, is_active, created_at, updated_at,
+               pipeline_version, validation_score
         FROM workout_programs
         WHERE client_user_id = %s AND coach_user_id = %s
         ORDER BY created_at DESC, id DESC
@@ -1907,74 +1852,21 @@ def get_latest_workout_program(
         raise HTTPException(status_code=404, detail="Workout program not found")
 
     program_id = program["id"]
-    is_active = bool(program["is_active"])
-
-    # Get all days for this program
-    cur.execute(
-        """
-        SELECT id, workout_program_id, day_of_week, order_index
-        FROM workout_days
-        WHERE workout_program_id = %s
-        ORDER BY order_index ASC, id ASC
-        """,
-        (program_id,),
-    )
-    days = cur.fetchall() or []
-
-    # Get all exercises grouped by workout_day_id
-    day_ids = [d["id"] for d in days]
-    exercises_by_day_id = {}
-    
-    if day_ids:
-        placeholders = ",".join(["%s"] * len(day_ids))
-        cur.execute(
-            f"""
-            SELECT we.id, we.workout_day_id, we.exercise_name, we.sets, we.reps,
-                   we.notes, we.order_index, el.gif_url
-            FROM workout_exercises we
-            LEFT JOIN exercise_library el ON el.id = we.exercise_library_id
-            WHERE we.workout_day_id IN ({placeholders})
-            ORDER BY we.workout_day_id ASC, we.order_index ASC, we.id ASC
-            """,
-            tuple(day_ids),
-        )
-        all_exercises = cur.fetchall() or []
-        
-        for ex in all_exercises:
-            day_id = ex["workout_day_id"]
-            if day_id not in exercises_by_day_id:
-                exercises_by_day_id[day_id] = []
-            exercises_by_day_id[day_id].append(ex)
-
-    # Build week structure: {mon: [], tue: [], ...}
-    week_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-    week = {day: [] for day in week_days}
-
-    # Map days to week structure
-    for day in days:
-        day_key = day["day_of_week"]
-        if day_key not in week_days:
-            continue
-        
-        day_id = day["id"]
-        exercises = exercises_by_day_id.get(day_id, [])
-        
-        # Convert exercises to flat format: {name, sets, reps, notes, gif_url}
-        week[day_key] = [
-            {
-                "name": ex.get("exercise_name") or "",
-                "sets": ex.get("sets"),
-                "reps": ex.get("reps") or "",
-                "notes": ex.get("notes") or "",
-                **({"gif_url": ex["gif_url"]} if ex.get("gif_url") else {}),
-            }
-            for ex in exercises
-        ]
+    weeks, flat_week, total_weeks = load_program_weeks(cur, program_id)
+    title = program.get("title") or ""
+    pipeline_version = program.get("pipeline_version")
+    generated_by = "ai" if (pipeline_version == "v3" or title.lower().startswith("ai")) else None
 
     return {
         "program_id": program_id,
-        "is_active": is_active,
-        "week": week
+        "is_active": bool(program["is_active"]),
+        "title": title,
+        "pipeline_version": pipeline_version,
+        "validation_score": program.get("validation_score"),
+        "generated_by": generated_by,
+        "total_weeks": total_weeks,
+        "week": flat_week,
+        "weeks": weeks,
     }
 
 
