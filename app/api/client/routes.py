@@ -119,3 +119,8 @@ try:
     from . import workout_sets  # noqa: F401
 except Exception:
     pass
+
+try:
+    from . import exercise_swap  # noqa: F401
+except Exception:
+    pass

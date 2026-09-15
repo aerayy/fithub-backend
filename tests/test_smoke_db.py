@@ -47,8 +47,7 @@ def client():
         yield c
 
 
-@pytest.fixture(scope="module")
-def user(client):
+def _register_user(client):
     tag = uuid.uuid4().hex[:10]
     email = f"smoke-{tag}@fithubpoint-test.com"
     phone = "05" + str(int(tag[:8], 16))[-9:].rjust(9, "1")
@@ -62,6 +61,11 @@ def user(client):
     body = r.json()
     assert body.get("ok") is True and body.get("token")
     return {"email": email, "password": password, "token": body["token"], "refresh": body.get("refresh_token")}
+
+
+@pytest.fixture(scope="module")
+def user(client):
+    return _register_user(client)
 
 
 def test_health_touches_db(client):
@@ -149,7 +153,8 @@ def test_delete_account_then_login_fails(client, user):
     assert r.status_code in (401, 404, 429)
 
 
-def test_workout_set_logs_and_history(client, user):
+def test_workout_set_logs_and_history(client):
+    user = _register_user(client)  # hesap silme testinden bağımsız taze kullanıcı
     h = {"Authorization": f"Bearer {user['token']}"}
     body = {"exercise_name": "Bench Press", "library_id": 42, "day_key": "mon",
             "sets": [{"set_index": 1, "weight_kg": 60, "reps": 8}, {"set_index": 2, "weight_kg": 62.5, "reps": 6}]}
@@ -170,3 +175,68 @@ def test_workout_set_logs_and_history(client, user):
     assert hist["best"]["est_1rm"] == 76.0 and len(hist["sessions"]) == 2  # Epley: 60×8 > 65×5
     r = client.put("/client/workout-sets", json={"sets": []}, headers=h)
     assert r.status_code == 422
+
+
+def test_exercise_alternatives_and_swap(client):
+    from app.core.database import _get_pool
+    user = _register_user(client)
+    h = {"Authorization": f"Bearer {user['token']}"}
+    pool = _get_pool(); conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE email = %s", (user["email"],))
+        uid = cur.fetchone()["id"]
+        rows = [
+            ("Barbell Bench Press", "horizontal_press", "barbell", ["chest"], 2, "g1"),
+            ("Dumbbell Bench Press", "horizontal_press", "dumbbell", ["chest"], 2, "g2"),
+            ("Machine Chest Press", "horizontal_press", "machine", ["chest"], 1, None),
+            ("Barbell Row", "horizontal_pull", "barbell", ["middle back"], 2, "g4"),
+        ]
+        ids = []
+        for name, pat, eq, mus, cx, gif in rows:
+            cur.execute(
+                """INSERT INTO exercise_library (external_id, canonical_name, movement_pattern, equipment_type, primary_muscles, complexity, gif_url, level, category)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'beginner', 'strength') RETURNING id""",
+                (f"smoke-{uuid.uuid4().hex[:8]}", name, pat, eq, mus, cx, gif),
+            )
+            ids.append(cur.fetchone()["id"])
+        cur.execute("INSERT INTO workout_programs (client_user_id, title, is_active, created_at, updated_at) VALUES (%s, 'Smoke', TRUE, NOW(), NOW()) RETURNING id", (uid,))
+        pid = cur.fetchone()["id"]
+        payload = {"title": "Gün", "blocks": [{"title": "A", "items": [
+            {"type": "exercise", "name": "Barbell Bench Press", "sets": 4, "reps": "8", "library_id": ids[0]},
+            {"type": "exercise", "name": "Barbell Row", "sets": 4, "reps": "8", "library_id": ids[3]},
+        ]}]}
+        import json as _json
+        cur.execute("INSERT INTO workout_days (workout_program_id, day_of_week, order_index, week_index, day_payload, created_at, updated_at) VALUES (%s, 'mon', 0, 1, %s, NOW(), NOW()) RETURNING id",
+                    (pid, _json.dumps(payload)))
+        did = cur.fetchone()["id"]
+        cur.execute("INSERT INTO workout_exercises (workout_day_id, exercise_name, sets, reps, order_index, exercise_library_id, created_at, updated_at) VALUES (%s, 'Barbell Bench Press', 4, '8', 0, %s, NOW(), NOW())", (did, ids[0]))
+        conn.commit()
+    finally:
+        pool.putconn(conn)
+
+    r = client.get(f"/client/exercise-alternatives?library_id={ids[0]}", headers=h)
+    assert r.status_code == 200, r.text
+    alts = r.json()["alternatives"]
+    assert [a["name"] for a in alts] == ["Dumbbell Bench Press", "Machine Chest Press"]  # aynı kalıp; farklı kalıp (row) yok
+    r = client.get(f"/client/exercise-alternatives?library_id={ids[0]}&equipment=machine", headers=h)
+    assert [a["name"] for a in r.json()["alternatives"]] == ["Machine Chest Press"]
+
+    r = client.post("/client/workout-exercises/swap", json={"day_key": "mon", "old_library_id": ids[0], "new_library_id": ids[1]}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["replaced_rows"] == 1 and r.json()["replaced_days"] == 1
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT exercise_name, exercise_library_id FROM workout_exercises WHERE workout_day_id = %s", (did,))
+        row = cur.fetchone()
+        assert row["exercise_name"] == "Dumbbell Bench Press" and row["exercise_library_id"] == ids[1]
+        cur.execute("SELECT day_payload FROM workout_days WHERE id = %s", (did,))
+        dp = cur.fetchone()["day_payload"]
+        dp = dp if isinstance(dp, dict) else _json.loads(dp)
+        names = [i["name"] for i in dp["blocks"][0]["items"]]
+        assert names == ["Dumbbell Bench Press", "Barbell Row"]
+    finally:
+        conn.rollback(); pool.putconn(conn)
+    r = client.post("/client/workout-exercises/swap", json={"day_key": "tue", "old_library_id": ids[0], "new_library_id": ids[1]}, headers=h)
+    assert r.status_code == 404
