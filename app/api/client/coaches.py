@@ -218,6 +218,14 @@ def get_coach_detail(
         if not coach_row:
             raise HTTPException(status_code=404, detail="Coach not found or inactive")
 
+        # Gerçek öğrenci sayısı (uygulamadaki profil kartı; eski sürüm sahte '350+' gösteriyordu)
+        cur.execute(
+            "SELECT COUNT(*)::int AS c FROM clients WHERE assigned_coach_id = %s",
+            (coach_user_id,),
+        )
+        _sc = cur.fetchone()
+        student_count = int(_sc["c"]) if _sc and _sc.get("c") is not None else 0
+
         # Get active packages
         cur.execute(
             """
@@ -260,6 +268,7 @@ def get_coach_detail(
 
         coach = {
             "user_id": coach_row["user_id"],
+            "student_count": student_count,
             "full_name": coach_row.get("full_name"),
             "bio": coach_row.get("bio"),
             "photo_url": coach_row.get("photo_url"),

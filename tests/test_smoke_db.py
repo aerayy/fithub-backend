@@ -520,3 +520,10 @@ def test_coach_drafts_assign_writes_real_rows(client):
     assert r.status_code == 200, r.text
     r = client.get("/client/nutrition/active", headers=student_h)
     assert r.status_code == 200, r.text
+
+
+def test_coach_detail_has_real_student_count(client):
+    coach_h, student_h, coach_id, uid = _coach_and_student(client)
+    r = client.get(f"/client/coaches/{coach_id}", headers=student_h)
+    assert r.status_code == 200, r.text
+    assert r.json()["coach"]["student_count"] == 1
