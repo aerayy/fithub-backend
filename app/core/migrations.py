@@ -64,9 +64,10 @@ def run_pending_migrations() -> dict:
         # Askıda kalan deploy'a karşı sigorta: kilit/ifade bekleme süreleri sınırlı.
         # Migration kilit alamazsa hızlıca hata verir → uygulama açılmaz → Render eski sürümü canlıda tutar.
         cur.execute("SET lock_timeout = '20s'")
-        cur.execute("SET statement_timeout = '180s'")
+        cur.execute("SET statement_timeout = '60s'")
         got_lock = False
-        for _ in range(6):  # ~2 dk: başka bir instance migration çalıştırıyorsa bekle
+        # Gunicorn worker boot zaman aşımı 120 sn: toplam bekleme bunun altında kalmalı.
+        for _ in range(3):  # ~1 dk: başka bir instance migration çalıştırıyorsa bekle
             cur.execute("SELECT pg_try_advisory_lock(%s)", (_LOCK_KEY,))
             if cur.fetchone()[0]:
                 got_lock = True
