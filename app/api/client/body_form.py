@@ -167,7 +167,7 @@ def analyze_body_form(
     allowed, reason = ai_sub.check_quota(db, uid, "body_analysis")
     if not allowed:
         messages = {
-            "no_subscription": "Vücut form analizi için aktif bir Fit AI Koç aboneliği gerekli.",
+            "no_subscription": "Vücut form analizi için aktif bir FitHub AI Coach aboneliği gerekli.",
             "tier_disallowed": "Vücut form analizi bu pakete dahil değil — Pro veya Elite'e yükseltebilirsin.",
             "limit_reached": "Bu ayki vücut form analizi hakkın doldu. Yeni dönemde tekrar deneyebilirsin.",
         }

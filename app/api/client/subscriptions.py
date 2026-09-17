@@ -15,13 +15,13 @@ from app.core.database import get_db
 from app.core.security import require_role
 from .routes import router
 
-# Fit AI Koç sanal koç kullanıcısı (kaynak: app/api/ai_coach_purchase.py AI_COACH_USER_ID).
+# FitHub AI Coach sanal koç kullanıcısı (kaynak: app/api/ai_coach_purchase.py AI_COACH_USER_ID).
 # AI koç aboneliği mağaza (Google Play / App Store) tarafından faturalandırılır;
 # buradaki insan-koç iptal/iade akışı mağaza faturalandırmasını DURDURMAZ. Bu yüzden
 # AI koç abonelerine bu endpoint'ler kapalıdır (eski uygulama sürümleri için savunma).
 AI_COACH_USER_ID = 60
 STORE_MANAGED_DETAIL = (
-    "Fit AI Koç aboneliğin mağaza (Google Play / App Store) üzerinden faturalandırılıyor. "
+    "FitHub AI Coach aboneliğin mağaza (Google Play / App Store) üzerinden faturalandırılıyor. "
     "Yenilemeyi durdurma, iptal ve iade işlemleri mağazanın abonelik sayfasından yapılır."
 )
 

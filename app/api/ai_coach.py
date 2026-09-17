@@ -74,7 +74,7 @@ def ai_coach_chat(
 def _quota_message_tr(reason: str, feature: str) -> str:
     """User-facing Turkish error messages for quota refusal."""
     messages = {
-        "no_subscription": "Fit AI Koç aboneliğin bulunmuyor. Paketleri inceleyebilirsin.",
+        "no_subscription": "FitHub AI Coach aboneliğin bulunmuyor. Paketleri inceleyebilirsin.",
         "tier_disallowed": "Bu özellik mevcut paketinde yer almıyor. Yükseltebilirsin.",
         "limit_reached": "Bu ayki kullanım hakkını doldurdun. Paketini yükseltebilirsin.",
     }

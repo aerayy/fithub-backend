@@ -606,3 +606,15 @@ def test_app_config_and_state_features(client):
     assert r.json()["state"] == "NO_COACH" and r.json()["features"]["real_coaches_enabled"] is False
     # superadmin olmayan değiştiremez
     assert client.patch("/superadmin/features", json={"real_coaches_enabled": True}, headers=h).status_code == 403
+
+
+def test_coach_waitlist_join_idempotent(client):
+    if not _db_reachable():
+        pytest.skip("DB yok")
+    _reset_rate_limits()
+    user = _register_user(client)
+    h = {"Authorization": f"Bearer {user['token']}"}
+    assert client.get("/client/coach-waitlist", headers=h).json() == {"joined": False}
+    assert client.post("/client/coach-waitlist", json={"source": "home_card"}, headers=h).json() == {"joined": True}
+    assert client.post("/client/coach-waitlist", json={}, headers=h).json() == {"joined": True}
+    assert client.get("/client/coach-waitlist", headers=h).json() == {"joined": True}

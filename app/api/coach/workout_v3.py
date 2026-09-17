@@ -74,7 +74,7 @@ async def generate_workout_v3(
     except Exception as e:
         logger.warning("v3: validation snapshot skipped (%s)", e)
 
-    # 4 haftalık mikrosüvel (Fit AI Koç ile aynı yol: build_microcycle → 28 gün satırı)
+    # 4 haftalık mikrosüvel (FitHub AI Coach ile aynı yol: build_microcycle → 28 gün satırı)
     try:
         from app.services.workout.progression import build_microcycle
         microcycle = build_microcycle(program)

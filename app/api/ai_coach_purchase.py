@@ -58,7 +58,7 @@ async def purchase_ai_coach(
     if not active_tier:
         raise HTTPException(
             status_code=402,
-            detail="Fit AI Koç aboneliğin bulunmuyor. Program oluşturmak için bir plan seç.",
+            detail="FitHub AI Coach aboneliğin bulunmuyor. Program oluşturmak için bir plan seç.",
         )
 
     try:
@@ -120,7 +120,7 @@ async def purchase_ai_coach(
             cur.execute(
                 """INSERT INTO subscriptions (client_user_id, coach_user_id, plan_name, status,
                    started_at, created_at, subscription_ref, program_assigned_at, program_state)
-                   VALUES (%s, %s, 'Fit AI Koç', 'active', NOW(), NOW(), %s, NOW(), 'assigned') RETURNING id""",
+                   VALUES (%s, %s, 'FitHub AI Coach', 'active', NOW(), NOW(), %s, NOW(), 'assigned') RETURNING id""",
                 (client_user_id, AI_COACH_USER_ID, f'ai_coach_{client_user_id}_{int(datetime.utcnow().timestamp())}'),
             )
             sub_id = cur.fetchone()["id"]
@@ -404,7 +404,7 @@ async def regenerate_workout(
     allowed, reason = ai_sub.check_quota(db, client_user_id, "workout_regen")
     if not allowed:
         messages = {
-            "no_subscription": "Program yenileme için aktif bir Fit AI Koç aboneliği gerekli.",
+            "no_subscription": "Program yenileme için aktif bir FitHub AI Coach aboneliği gerekli.",
             "tier_disallowed": "Program yenileme bu pakete dahil değil — Pro veya Elite'e yükseltebilirsin.",
             "limit_reached": "Bu ayki program yenileme hakkın doldu. Yeni dönemde tekrar deneyebilirsin.",
         }
@@ -437,7 +437,7 @@ async def renew_cycle(
 
     Kota TÜKETMEZ (Starter dahil): döngü yenileme aboneliğin doğal parçasıdır;
     workout_regen kotası "beğenmedim, baştan üret" içindir. Şartlar: aktif
-    Fit AI Koç aboneliği + aktif çok haftalı AI programı + döngü bitmiş
+    FitHub AI Coach aboneliği + aktif çok haftalı AI programı + döngü bitmiş
     (program_cycle.compute_cycle → is_finished). Aksi halde 402 / 404 / 409.
     """
     from app.services import program_cycle
@@ -446,7 +446,7 @@ async def renew_cycle(
     if not ai_sub.get_active_tier(db, client_user_id):
         raise HTTPException(
             status_code=402,
-            detail={"code": "no_subscription", "message": "Yeni döngü için aktif bir Fit AI Koç aboneliği gerekli."},
+            detail={"code": "no_subscription", "message": "Yeni döngü için aktif bir FitHub AI Coach aboneliği gerekli."},
         )
 
     cur = db.cursor(cursor_factory=RealDictCursor)

@@ -146,7 +146,7 @@ def save_meal_photo(
     except Exception:
         pass
 
-    # AI analizi — Fit AI Koç kotasına bağlı (Starter 5 / Pro 30 / Elite sınırsız,
+    # AI analizi — FitHub AI Coach kotasına bağlı (Starter 5 / Pro 30 / Elite sınırsız,
     # abonelik yoksa 0). Fotoğraf her durumda kaydedilir ve koça gider; yalnızca
     # OpenAI vision analizi kota yoksa ATLANIR (status='skipped') — abonesiz
     # kullanıcının sınırsız analiz maliyeti üretmesi engellenir.

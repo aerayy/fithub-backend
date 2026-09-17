@@ -17,7 +17,7 @@ import os
 # ödemesiz "mock" satın alma. Canlıda kullanıcı koçu bedava alamasın diye
 # kapalı; iyzico bağlanınca Render env'de HUMAN_COACH_PURCHASE_ENABLED=1 yapılır.
 HUMAN_COACH_PURCHASE_DISABLED_DETAIL = (
-    "Gerçek koç paketleri çok yakında. Şimdilik Fit AI Koç paketlerini kullanabilirsin."
+    "Gerçek koç paketleri çok yakında. Şimdilik FitHub AI Coach paketlerini kullanabilirsin."
 )
 
 
