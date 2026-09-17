@@ -26,11 +26,13 @@ def resolve_exercise_library_id(cur, name: str):
         """
         SELECT id
         FROM exercise_library
-        WHERE canonical_name ILIKE %s
+        WHERE NOT is_hidden AND (
+           canonical_name ILIKE %s
            OR external_id ILIKE %s
            OR (aliases IS NOT NULL AND EXISTS (
                 SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s
            ))
+        )
         ORDER BY
           CASE WHEN canonical_name ILIKE %s THEN 0 ELSE 1 END,
           canonical_name ASC
@@ -48,7 +50,8 @@ def resolve_exercise_library_id(cur, name: str):
         WITH q AS (SELECT %s::text AS qnorm)
         SELECT id
         FROM exercise_library, q
-        WHERE regexp_replace(lower(canonical_name), '[^a-z0-9]+', '', 'g')
+        WHERE NOT is_hidden AND (
+           regexp_replace(lower(canonical_name), '[^a-z0-9]+', '', 'g')
               LIKE ('%' || q.qnorm || '%')
            OR regexp_replace(lower(external_id), '[^a-z0-9]+', '', 'g')
               LIKE ('%' || q.qnorm || '%')
@@ -58,6 +61,7 @@ def resolve_exercise_library_id(cur, name: str):
                 WHERE regexp_replace(lower(a), '[^a-z0-9]+', '', 'g')
                       LIKE ('%' || q.qnorm || '%')
            ))
+        )
         ORDER BY length(canonical_name) ASC
         LIMIT 1
         """,

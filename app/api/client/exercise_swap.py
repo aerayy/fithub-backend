@@ -56,7 +56,7 @@ def exercise_alternatives(
 
     sql = f"""SELECT {_EX_COLS}
               FROM exercise_library
-              WHERE id <> %s AND movement_pattern = %s"""
+              WHERE id <> %s AND NOT is_hidden AND movement_pattern = %s"""
     params: List[Any] = [library_id, src.get("movement_pattern")]
     if muscles:
         sql += " AND primary_muscles && %s"

@@ -152,7 +152,7 @@ def _match_exercise_library(cur, exercise_name: str, muscle_hint: str = ""):
     cur.execute(
         """SELECT id, canonical_name, gif_url FROM exercise_library
            WHERE canonical_name ILIKE %s
-             AND gif_url IS NOT NULL AND gif_url != ''
+             AND NOT is_hidden AND gif_url IS NOT NULL AND gif_url != ''
            LIMIT 1""",
         (name,)
     )
@@ -185,7 +185,7 @@ def _match_exercise_library(cur, exercise_name: str, muscle_hint: str = ""):
             f"""SELECT id, canonical_name, gif_url,
                        ({score_expr}) AS word_score
                 FROM exercise_library
-                WHERE ({score_expr}) >= %s
+                WHERE NOT is_hidden AND ({score_expr}) >= %s
                 ORDER BY
                   (gif_url IS NOT NULL AND gif_url != '') DESC,
                   ({score_expr}) DESC,
@@ -214,7 +214,7 @@ def _match_exercise_library(cur, exercise_name: str, muscle_hint: str = ""):
         where_clauses = " AND ".join(or_groups)
         cur.execute(
             f"""SELECT id, canonical_name, gif_url FROM exercise_library
-                WHERE {where_clauses}
+                WHERE NOT is_hidden AND ({where_clauses})
                 ORDER BY (gif_url IS NOT NULL AND gif_url != '') DESC,
                          length(canonical_name) ASC
                 LIMIT 1""",
@@ -229,7 +229,7 @@ def _match_exercise_library(cur, exercise_name: str, muscle_hint: str = ""):
     cur.execute(
         """SELECT id, canonical_name, gif_url FROM exercise_library
            WHERE canonical_name ILIKE %s
-             AND gif_url IS NOT NULL AND gif_url != ''
+             AND NOT is_hidden AND gif_url IS NOT NULL AND gif_url != ''
            ORDER BY length(canonical_name) ASC
            LIMIT 1""",
         (f"%{normalized}%",)
@@ -279,7 +279,7 @@ def _safe_fallback_exercise(cur, muscle_hint: str = ""):
         cur.execute(
             """SELECT id, canonical_name, gif_url FROM exercise_library
                WHERE canonical_name ILIKE %s
-                 AND gif_url IS NOT NULL AND gif_url != ''
+                 AND NOT is_hidden AND gif_url IS NOT NULL AND gif_url != ''
                LIMIT 1""",
             (name,),
         )
@@ -290,7 +290,7 @@ def _safe_fallback_exercise(cur, muscle_hint: str = ""):
     # Daha da kötü ihtimalde: gif'i olan ANY exercise
     cur.execute(
         """SELECT id, canonical_name, gif_url FROM exercise_library
-           WHERE gif_url IS NOT NULL AND gif_url != ''
+           WHERE NOT is_hidden AND gif_url IS NOT NULL AND gif_url != ''
            LIMIT 1"""
     )
     return cur.fetchone()
@@ -804,7 +804,7 @@ async def generate_workout_program(
         cur.execute(
             """SELECT canonical_name, equipment, level, category, primary_muscles
                FROM exercise_library
-               WHERE gif_url IS NOT NULL AND gif_url != ''
+               WHERE NOT is_hidden AND gif_url IS NOT NULL AND gif_url != ''
                ORDER BY
                  CASE WHEN level = 'beginner' THEN 0
                       WHEN level = 'intermediate' THEN 1

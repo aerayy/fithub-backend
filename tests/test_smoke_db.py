@@ -527,3 +527,47 @@ def test_coach_detail_has_real_student_count(client):
     r = client.get(f"/client/coaches/{coach_id}", headers=student_h)
     assert r.status_code == 200, r.text
     assert r.json()["coach"]["student_count"] == 1
+
+
+def test_hidden_library_entries_excluded(client):
+    """Migration 066: is_hidden=TRUE kayıtlar arama / isimle detay / alternatiflerde çıkmaz,
+    id ile detay (eski programlar) çalışmaya devam eder."""
+    if not _db_reachable():
+        pytest.skip("DB yok")
+    from app.core.database import _get_pool
+    from psycopg2.extras import RealDictCursor
+    user = _register_user(client)
+    h = {"Authorization": f"Bearer {user['token']}"}
+    tag = uuid.uuid4().hex[:6]
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        ids = {}
+        for key, name, hidden in (("vis", f"Visible Press {tag}", False), ("hid", f"Hidden Demo {tag}", True)):
+            cur.execute(
+                """INSERT INTO exercise_library (external_id, canonical_name, movement_pattern, equipment_type,
+                                                 primary_muscles, complexity, gif_url, level, category, is_hidden)
+                   VALUES (%s, %s, 'horizontal_press', 'barbell', %s, 2, 'g', 'beginner', 'strength', %s) RETURNING id""",
+                (f"hid-{tag}-{key}", name, [f"chest-{tag}"], hidden),
+            )
+            ids[key] = cur.fetchone()["id"]
+        conn.commit()
+    finally:
+        pool.putconn(conn)
+
+    r = client.get(f"/exercises/search?q={tag}", headers=h)
+    assert r.status_code == 200, r.text
+    names = [e["name"] for e in r.json()["exercises"]]
+    assert f"Visible Press {tag}" in names and f"Hidden Demo {tag}" not in names
+
+    r = client.get(f"/exercises/detail?id={ids['hid']}", headers=h)
+    assert r.status_code == 200 and r.json().get("found") is True
+
+    r = client.get(f"/exercises/detail?name=Hidden Demo {tag}", headers=h)
+    assert r.status_code == 200 and not r.json().get("found")
+
+    r = client.get(f"/client/exercise-alternatives?library_id={ids['vis']}", headers=h)
+    assert r.status_code == 200, r.text
+    alt_ids = {a["id"] for a in (r.json().get("alternatives") or r.json().get("items") or [])}
+    assert ids["hid"] not in alt_ids

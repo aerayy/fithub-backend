@@ -166,6 +166,7 @@ def _select_for_muscle(
                complexity, fatigue_score
         FROM exercise_library
         WHERE primary_muscles && %s
+          AND NOT is_hidden
           AND equipment_type = ANY(%s)
           AND COALESCE(complexity, 5) <= %s
           AND movement_pattern IS NOT NULL

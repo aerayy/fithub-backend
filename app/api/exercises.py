@@ -33,7 +33,7 @@ def search_exercises(
             secondary_muscles,
             gif_url
         FROM exercise_library
-        WHERE
+        WHERE NOT is_hidden AND (
             canonical_name ILIKE %s
             OR external_id ILIKE %s
             OR (aliases IS NOT NULL AND EXISTS (
@@ -41,6 +41,7 @@ def search_exercises(
                 FROM unnest(aliases) a
                 WHERE a ILIKE %s
             ))
+        )
         ORDER BY
             CASE WHEN canonical_name ILIKE %s THEN 0
                  WHEN canonical_name ILIKE %s THEN 1
@@ -82,16 +83,16 @@ def get_exercise_detail(
 
     # 2. Exact name match
     if not row and name:
-        cur.execute(f"SELECT {_FIELDS} FROM exercise_library WHERE canonical_name ILIKE %s LIMIT 1", (name,))
+        cur.execute(f"SELECT {_FIELDS} FROM exercise_library WHERE NOT is_hidden AND canonical_name ILIKE %s LIMIT 1", (name,))
         row = cur.fetchone()
 
     # 3. Fuzzy name match
     if not row and name:
         cur.execute(
             f"""SELECT {_FIELDS} FROM exercise_library
-            WHERE canonical_name ILIKE %s
+            WHERE NOT is_hidden AND (canonical_name ILIKE %s
                OR (aliases IS NOT NULL AND EXISTS (
-                   SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s))
+                   SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s)))
             ORDER BY
                 CASE WHEN canonical_name ILIKE %s THEN 0
                      WHEN canonical_name ILIKE %s THEN 1
