@@ -31,11 +31,11 @@ CREATE TABLE IF NOT EXISTS rag_user_profiles (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_profiles_target ON rag_user_profiles(target);
-CREATE INDEX idx_rag_profiles_gender ON rag_user_profiles(gender);
-CREATE INDEX idx_rag_profiles_gym ON rag_user_profiles(gym);
-CREATE INDEX idx_rag_profiles_age ON rag_user_profiles(age_int);
-CREATE INDEX idx_rag_profiles_weight ON rag_user_profiles(weight_kg);
+CREATE INDEX IF NOT EXISTS idx_rag_profiles_target ON rag_user_profiles(target);
+CREATE INDEX IF NOT EXISTS idx_rag_profiles_gender ON rag_user_profiles(gender);
+CREATE INDEX IF NOT EXISTS idx_rag_profiles_gym ON rag_user_profiles(gym);
+CREATE INDEX IF NOT EXISTS idx_rag_profiles_age ON rag_user_profiles(age_int);
+CREATE INDEX IF NOT EXISTS idx_rag_profiles_weight ON rag_user_profiles(weight_kg);
 
 
 -- 2. Beslenme planlari (16K)
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS rag_nutrition_plans (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_nplans_user ON rag_nutrition_plans(user_id);
+CREATE INDEX IF NOT EXISTS idx_rag_nplans_user ON rag_nutrition_plans(user_id);
 
 
 -- 3. Beslenme ogunleri (127K)
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS rag_nutrition_meals (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_nmeals_plan ON rag_nutrition_meals(plan_id);
+CREATE INDEX IF NOT EXISTS idx_rag_nmeals_plan ON rag_nutrition_meals(plan_id);
 
 
 -- 4. Ogundeki besinler (518K) — gercek koc tarafindan secilmis
@@ -84,8 +84,8 @@ CREATE TABLE IF NOT EXISTS rag_nutrition_foods (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_nfoods_meal ON rag_nutrition_foods(meal_id);
-CREATE INDEX idx_rag_nfoods_name ON rag_nutrition_foods(name);
+CREATE INDEX IF NOT EXISTS idx_rag_nfoods_meal ON rag_nutrition_foods(meal_id);
+CREATE INDEX IF NOT EXISTS idx_rag_nfoods_name ON rag_nutrition_foods(name);
 
 
 -- 5. Besin master DB (~500 — BeGreens'in master nutrition lookup)
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS rag_food_master (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_food_master_name ON rag_food_master(name);
+CREATE INDEX IF NOT EXISTS idx_rag_food_master_name ON rag_food_master(name);
 
 
 -- 6. Antrenman planlari (18K)
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS rag_training_plans (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_tplans_user ON rag_training_plans(user_id);
+CREATE INDEX IF NOT EXISTS idx_rag_tplans_user ON rag_training_plans(user_id);
 
 
 -- 7. Antrenman seansi (110K)
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS rag_training_sessions (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_tsessions_plan ON rag_training_sessions(plan_id);
+CREATE INDEX IF NOT EXISTS idx_rag_tsessions_plan ON rag_training_sessions(plan_id);
 
 
 -- 8. Egzersiz set/tekrarlari (890K) — BeGreens 3-li superset format korunuyor
@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS rag_training_exercises (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_texercises_training ON rag_training_exercises(training_id);
+CREATE INDEX IF NOT EXISTS idx_rag_texercises_training ON rag_training_exercises(training_id);
 
 
 -- 9. Egzersiz master DB
@@ -164,7 +164,7 @@ CREATE TABLE IF NOT EXISTS rag_exercise_master (
     imported_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rag_exercise_master_name ON rag_exercise_master(name);
+CREATE INDEX IF NOT EXISTS idx_rag_exercise_master_name ON rag_exercise_master(name);
 
 
 COMMIT;
