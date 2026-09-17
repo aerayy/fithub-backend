@@ -59,6 +59,21 @@ def client():
         yield c
 
 
+def _reset_rate_limits():
+    """Aynı süreçte çok sayıda kayıt/giriş yapan testler DB hız sınırı kovasını doldurmasın."""
+    try:
+        from app.core.database import _get_pool
+        conn = _get_pool().getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE rate_limit_buckets SET count = 0 WHERE key LIKE '%%testclient%%'")
+            conn.commit()
+        finally:
+            _get_pool().putconn(conn)
+    except Exception:
+        pass
+
+
 def _register_user(client):
     tag = uuid.uuid4().hex[:10]
     email = f"smoke-{tag}@fithubpoint-test.com"
@@ -536,6 +551,7 @@ def test_hidden_library_entries_excluded(client):
         pytest.skip("DB yok")
     from app.core.database import _get_pool
     from psycopg2.extras import RealDictCursor
+    _reset_rate_limits()
     user = _register_user(client)
     h = {"Authorization": f"Bearer {user['token']}"}
     tag = uuid.uuid4().hex[:6]
@@ -571,3 +587,22 @@ def test_hidden_library_entries_excluded(client):
     assert r.status_code == 200, r.text
     alt_ids = {a["id"] for a in (r.json().get("alternatives") or r.json().get("items") or [])}
     assert ids["hid"] not in alt_ids
+
+
+def test_app_config_and_state_features(client):
+    """Migration 067: /config/app herkese açık bayraklar; /client/state 'features' taşır."""
+    if not _db_reachable():
+        pytest.skip("DB yok")
+    r = client.get("/config/app")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["features"]["real_coaches_enabled"] is False
+    assert body["ai_coach"]["name"] == "FitHub AI Coach" and body["ai_coach"]["trial_days"] == 7
+    _reset_rate_limits()
+    user = _register_user(client)
+    h = {"Authorization": f"Bearer {user['token']}"}
+    r = client.get("/client/state", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "NO_COACH" and r.json()["features"]["real_coaches_enabled"] is False
+    # superadmin olmayan değiştiremez
+    assert client.patch("/superadmin/features", json={"real_coaches_enabled": True}, headers=h).status_code == 403

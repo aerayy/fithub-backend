@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException
 
 from app.core.database import get_db
 from app.core.security import require_role
+from app.services.app_settings import get_features
 from .routes import router
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,13 @@ def get_client_state(
     db=Depends(get_db),
     current_user=Depends(require_role("client")),
 ):
+    """Durum + sunucu özellik bayrakları (features). Bayraklar app_settings tablosundan gelir."""
+    out = _compute_client_state(db, current_user)
+    out["features"] = get_features(db)
+    return out
+
+
+def _compute_client_state(db, current_user):
     """
     Client Home state (single source of truth):
     - NO_COACH: clients.assigned_coach_id is NULL  (coach yok)

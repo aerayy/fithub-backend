@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from psycopg2.extras import RealDictCursor
 from app.core.security import require_role
 from app.core.database import get_db
+from app.services.app_settings import get_features, set_features
 
 router = APIRouter(prefix="/superadmin", tags=["superadmin"])
 
@@ -292,3 +293,17 @@ def ai_usage_summary(
     """OpenAI token kullanımı özeti (son N gün) + tahmini USD (migration 062)."""
     from app.services.ai_usage import usage_summary
     return usage_summary(db, days)
+
+
+@router.get("/features")
+def superadmin_get_features(db=Depends(get_db), user=Depends(require_role("superadmin"))):
+    """Sunucu özellik bayrakları (real_coaches_enabled, ai_coach_trial_days, ai_coach_name)."""
+    return {"features": get_features(db, force=True)}
+
+
+@router.patch("/features")
+def superadmin_patch_features(body: dict, db=Depends(get_db), user=Depends(require_role("superadmin"))):
+    try:
+        return {"features": set_features(db, body or {})}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
