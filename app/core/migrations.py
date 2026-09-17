@@ -16,6 +16,7 @@ açılışta `run_pending_migrations()` çağırır:
 """
 import logging
 import os
+import time
 import re
 from pathlib import Path
 
@@ -60,7 +61,19 @@ def run_pending_migrations() -> dict:
     applied_now = []
     try:
         cur = conn.cursor()
-        cur.execute("SELECT pg_advisory_lock(%s)", (_LOCK_KEY,))
+        # Askıda kalan deploy'a karşı sigorta: kilit/ifade bekleme süreleri sınırlı.
+        # Migration kilit alamazsa hızlıca hata verir → uygulama açılmaz → Render eski sürümü canlıda tutar.
+        cur.execute("SET lock_timeout = '20s'")
+        cur.execute("SET statement_timeout = '180s'")
+        got_lock = False
+        for _ in range(6):  # ~2 dk: başka bir instance migration çalıştırıyorsa bekle
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (_LOCK_KEY,))
+            if cur.fetchone()[0]:
+                got_lock = True
+                break
+            time.sleep(20)
+        if not got_lock:
+            raise RuntimeError("migrations: advisory lock alınamadı (başka bir migration askıda olabilir)")
         try:
             cur.execute("SELECT to_regclass('public.schema_migrations')")
             has_table = cur.fetchone()[0] is not None
