@@ -29,7 +29,9 @@ def _attach_package(cur, subscription):
         )
         pkg = cur.fetchone()
         if pkg:
-            subscription["plan_name"] = pkg["name"]
+            # Satirda plan_name varsa (AI aboneligi 'FitHub AI Coach' yaziyor) onu koru.
+            if not subscription.get("plan_name"):
+                subscription["plan_name"] = pkg["name"]
             subscription["description"] = pkg.get("description")
             subscription["price"] = float(pkg["price"]) if pkg.get("price") is not None else None
             subscription["duration_days"] = pkg.get("duration_days")
@@ -82,6 +84,7 @@ def _compute_client_state(db, current_user):
             """
             SELECT
                 id,
+                plan_name,
                 status,
                 purchased_at,
                 started_at,
@@ -113,6 +116,7 @@ def _compute_client_state(db, current_user):
                 """
                 SELECT
                     id,
+                    plan_name,
                     status,
                     purchased_at,
                     started_at,
