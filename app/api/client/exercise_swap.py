@@ -9,6 +9,7 @@
   activity_log ile bildirilir.
 """
 import json
+import re
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -83,6 +84,32 @@ class SwapInput(BaseModel):
     all_weeks: bool = True
 
 
+_RIR_ONEK = re.compile(r"^(RIR\s*\d+\.\s*)", re.I)
+_HAFTA_EKI = re.compile(r"(\s*—\s*(?:Hafta|Deload)[^—]*)$", re.I)
+
+
+def _swap_notu(eski_not: str) -> str:
+    """Takas sonrasi koc notunu yeni hareketle tutarli hale getirir.
+
+    Eski notun gövdesi (ör. "Başlangıç için güvenli, efektif compound göğüs
+    hareketi") DEGISTIRILEN hareketi anlatiyordu ve takastan sonra yaniltici
+    kaliyordu. RIR onekini ve hafta ilerleme ekini koru, govdeyi degistir.
+    """
+    eski_not = (eski_not or "").strip()
+    if not eski_not:
+        return "Alternatif olarak seçildi."
+    onek = ""
+    m = _RIR_ONEK.match(eski_not)
+    if m:
+        onek = m.group(1)
+        eski_not = eski_not[m.end():]
+    ek = ""
+    m2 = _HAFTA_EKI.search(eski_not)
+    if m2:
+        ek = m2.group(1)
+    return f"{onek}Alternatif olarak seçildi.{ek}".strip()
+
+
 def _replace_in_payload(payload: Any, old_id: Optional[int], old_name: str, new: Dict[str, Any]) -> int:
     """day_payload.blocks[].items[] içinde eşleşen öğeleri yenisiyle değiştirir; sayı döner."""
     if isinstance(payload, str):
@@ -109,9 +136,10 @@ def _replace_in_payload(payload: Any, old_id: Optional[int], old_name: str, new:
                 item["library_id"] = new["id"]
                 if new.get("gif_url"):
                     item["gif_url"] = new["gif_url"]
+                item["notes"] = _swap_notu(item.get("notes") or "")
                 item["swapped"] = True
                 n += 1
-    return n if n == 0 else n, payload
+    return n, payload
 
 
 @router.post("/workout-exercises/swap")
