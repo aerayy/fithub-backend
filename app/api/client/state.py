@@ -12,6 +12,32 @@ from .routes import router
 logger = logging.getLogger(__name__)
 
 
+def _attach_package(cur, subscription):
+    """Paket adi/fiyati/aciklamasi ekle.
+
+    Uygulama profil ekraninda plan_name / price / description okuyor ama state
+    yaniti yalnizca subscriptions satirini donduruyordu: plan adi bos, fiyat 0 TL
+    gorunuyordu. package_id ile coach_packages'tan tamamla.
+    """
+    pid = subscription.get("package_id")
+    if not pid:
+        return subscription
+    try:
+        cur.execute(
+            "SELECT name, description, price, duration_days FROM coach_packages WHERE id = %s",
+            (pid,),
+        )
+        pkg = cur.fetchone()
+        if pkg:
+            subscription["plan_name"] = pkg["name"]
+            subscription["description"] = pkg.get("description")
+            subscription["price"] = float(pkg["price"]) if pkg.get("price") is not None else None
+            subscription["duration_days"] = pkg.get("duration_days")
+    except Exception as e:  # paket silinmis olabilir, state yanitini bozma
+        logger.warning("paket bilgisi eklenemedi (package_id=%s): %s", pid, e)
+    return subscription
+
+
 @router.get("/state")
 def get_client_state(
     db=Depends(get_db),
@@ -129,6 +155,7 @@ def _compute_client_state(db, current_user):
                 if subscription.get(field) is not None and isinstance(subscription[field], datetime):
                     subscription[field] = subscription[field].isoformat()
 
+            _attach_package(cur, subscription)
             return {"state": "EXPIRED" if is_expired else "NO_COACH", "subscription": subscription}
 
         # 4) Burada subscription_row kesin: status=active ve ends_at geçmemiş
@@ -137,6 +164,8 @@ def _compute_client_state(db, current_user):
                       "canceled_at", "refund_requested_at", "refund_processed_at"]:
             if subscription.get(field) is not None and isinstance(subscription[field], datetime):
                 subscription[field] = subscription[field].isoformat()
+
+        _attach_package(cur, subscription)
 
         program_state = subscription_row.get("program_state")
         if program_state == "assigned" or subscription_row["program_assigned_at"] is not None:
