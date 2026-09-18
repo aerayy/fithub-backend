@@ -49,7 +49,7 @@ async def generate_workout_v3(
         raise HTTPException(status_code=502, detail=f"v3 pipeline error: {e}")
 
     if not program:
-        raise HTTPException(status_code=502, detail="v3 pipeline returned no program")
+        raise HTTPException(status_code=502, detail="Program oluşturulamadı. Lütfen tekrar deneyin.")
 
     # Profile persist (audit)
     try:

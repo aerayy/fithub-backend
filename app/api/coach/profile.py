@@ -87,7 +87,7 @@ def update_my_profile(
     updates = {k: payload.get(k) for k in payload.keys() if k in allowed_fields}
 
     if not updates:
-        raise HTTPException(status_code=400, detail="No valid fields to update")
+        raise HTTPException(status_code=400, detail="Güncellenecek geçerli bir alan yok.")
 
     set_parts = []
     values = []
@@ -109,7 +109,7 @@ def update_my_profile(
 
     row = cur.fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="Coach profile not found")
+        raise HTTPException(status_code=404, detail="Koç profili bulunamadı.")
 
     db.commit()
     return {"ok": True, "profile": row}

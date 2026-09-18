@@ -216,7 +216,7 @@ def get_coach_detail(
 
         coach_row = cur.fetchone()
         if not coach_row:
-            raise HTTPException(status_code=404, detail="Coach not found or inactive")
+            raise HTTPException(status_code=404, detail="Koç bulunamadı ya da aktif değil.")
 
         # Gerçek öğrenci sayısı (uygulamadaki profil kartı; eski sürüm sahte '350+' gösteriyordu)
         cur.execute(

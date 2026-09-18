@@ -49,7 +49,7 @@ async def get_daily_motivation(
     client_data = cur.fetchone()
 
     if not client_data:
-        raise HTTPException(status_code=404, detail="Client onboarding data not found")
+        raise HTTPException(status_code=404, detail="Profil bilgilerin bulunamadı.")
 
     # Fetch coach name
     cur.execute(

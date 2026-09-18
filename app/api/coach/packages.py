@@ -77,7 +77,7 @@ def update_package(
         (package_id, current_user["id"]),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Package not found")
+        raise HTTPException(status_code=404, detail="Paket bulunamadı.")
 
     fields = []
     values = []
@@ -99,7 +99,7 @@ def update_package(
         values.append(body.is_active)
 
     if not fields:
-        raise HTTPException(status_code=400, detail="No fields to update")
+        raise HTTPException(status_code=400, detail="Güncellenecek bir alan yok.")
 
     values.extend([package_id, current_user["id"]])
 

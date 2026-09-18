@@ -49,7 +49,7 @@ def _ensure_coach_conversation(cur, conversation_id: int, coach_user_id: int) ->
     )
     row = cur.fetchone()
     if not row or row["coach_user_id"] != coach_user_id:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(status_code=404, detail="Konuşma bulunamadı.")
     return dict(row)
 
 
@@ -123,7 +123,7 @@ def create_coach_conversation(
     if not sub:
         raise HTTPException(
             status_code=403,
-            detail="Client does not have an active subscription with you",
+            detail="Bu öğrencinin sizinle aktif aboneliği yok.",
         )
     subscription_id = sub.get("id")
 
@@ -225,7 +225,7 @@ def send_coach_message(
 
     # Validate: text messages need body, image messages need media_url
     if body.message_type == "text" and not body.body:
-        raise HTTPException(status_code=400, detail="body cannot be empty for text messages")
+        raise HTTPException(status_code=400, detail="Mesaj boş olamaz.")
     if body.message_type == "image" and not body.media_url:
         raise HTTPException(status_code=400, detail="media_url required for image messages")
 
@@ -292,6 +292,6 @@ def mark_coach_message_read(
         (message_id, conversation_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Message not found or already read")
+        raise HTTPException(status_code=404, detail="Mesaj bulunamadı ya da zaten okunmuş.")
     db.commit()
     return {"ok": True}

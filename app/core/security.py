@@ -47,7 +47,7 @@ def get_current_user(
     cur.execute("SELECT id, email, role FROM users WHERE id = %s", (user_id,))
     user_row = cur.fetchone()
     if not user_row:
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=401, detail="Kullanıcı bulunamadı.")
     
     # Convert RealDictRow to dict and ensure we have the required fields
     user = {
@@ -76,7 +76,7 @@ def require_role(*roles: str):
     """
     def _dep(user=Depends(get_current_user)):
         if roles and user["role"] not in roles:
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
+            raise HTTPException(status_code=403, detail="Bu işlem için yetkiniz yok.")
         return user
     return _dep
 
@@ -127,7 +127,7 @@ def admin_key_or_superadmin(
         cur.execute("SELECT id, role FROM users WHERE id = %s", (user_id,))
         row = cur.fetchone()
         if not row or row["role"] != "superadmin":
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
+            raise HTTPException(status_code=403, detail="Bu işlem için yetkiniz yok.")
         return {"via": "superadmin", "id": row["id"]}
     raise HTTPException(status_code=401, detail="Invalid or missing admin key")
 

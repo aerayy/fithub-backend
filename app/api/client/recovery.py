@@ -51,7 +51,7 @@ async def get_recovery_tips(
     client_data = cur.fetchone()
 
     if not client_data:
-        raise HTTPException(status_code=404, detail="Client onboarding data not found")
+        raise HTTPException(status_code=404, detail="Profil bilgilerin bulunamadı.")
 
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")

@@ -90,7 +90,7 @@ async def upload_image(
         }
     except Exception as e:
         logger.error(f"Cloudinary upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Image upload failed")
+        raise HTTPException(status_code=500, detail="Görsel yüklenemedi. Lütfen tekrar deneyin.")
 
 
 @router.post("/video")
@@ -186,4 +186,4 @@ async def upload_voice(
         }
     except Exception as e:
         logger.error(f"Cloudinary voice upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Sesli mesaj yuklenemedi")
+        raise HTTPException(status_code=500, detail="Sesli mesaj yüklenemedi.")

@@ -192,14 +192,14 @@ def get_daily_targets(
         if not client_row:
             raise HTTPException(
                 status_code=400,
-                detail="Onboarding not completed"
+                detail="Profil adımlarını tamamlaman gerekiyor."
             )
         
         # Check if onboarding is done
         if not client_row["onboarding_done"]:
             raise HTTPException(
                 status_code=400,
-                detail="Onboarding not completed"
+                detail="Profil adımlarını tamamlaman gerekiyor."
             )
         
         # Check if required measurements exist
@@ -209,7 +209,7 @@ def get_daily_targets(
         if weight_kg_raw is None or height_cm_raw is None:
             raise HTTPException(
                 status_code=400,
-                detail="Missing client measurements"
+                detail="Ölçü bilgilerin eksik."
             )
         
         # Cast Decimal to float (PostgreSQL numeric returns Decimal, but formulas use floats)

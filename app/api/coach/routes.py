@@ -391,7 +391,7 @@ def get_active_programs(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     # workout program (filtered by coach ownership)
     cur.execute(
@@ -586,7 +586,7 @@ def save_workout_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     try:
         # Create program as DRAFT (is_active=false)
@@ -666,7 +666,7 @@ async def generate_workout_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     # Check if student exists
     cur.execute(
@@ -674,7 +674,7 @@ async def generate_workout_program(
         (student_user_id,),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Student not found")
+        raise HTTPException(status_code=404, detail="Öğrenci bulunamadı.")
 
     # Fetch client onboarding data
     cur.execute(
@@ -694,7 +694,7 @@ async def generate_workout_program(
     client_data = cur.fetchone()
 
     if not client_data:
-        raise HTTPException(status_code=404, detail="Client onboarding data not found")
+        raise HTTPException(status_code=404, detail="Profil bilgilerin bulunamadı.")
 
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
@@ -1832,7 +1832,7 @@ def get_latest_workout_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     # Get latest program (by created_at DESC, then id DESC)
     cur.execute(
@@ -1849,7 +1849,7 @@ def get_latest_workout_program(
     program = cur.fetchone()
 
     if not program:
-        raise HTTPException(status_code=404, detail="Workout program not found")
+        raise HTTPException(status_code=404, detail="Antrenman programı bulunamadı.")
 
     program_id = program["id"]
     weeks, flat_week, total_weeks = load_program_weeks(cur, program_id)
@@ -1893,7 +1893,7 @@ def assign_latest_workout_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     try:
         # Find latest program for this student
@@ -1910,7 +1910,7 @@ def assign_latest_workout_program(
         program = cur.fetchone()
 
         if not program:
-            raise HTTPException(status_code=404, detail="Workout program not found")
+            raise HTTPException(status_code=404, detail="Antrenman programı bulunamadı.")
 
         program_id = program["id"]
 
@@ -1993,7 +1993,7 @@ def assign_latest_nutrition_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     try:
         cur.execute(
@@ -2007,7 +2007,7 @@ def assign_latest_nutrition_program(
         )
         program = cur.fetchone()
         if not program:
-            raise HTTPException(status_code=404, detail="Nutrition program not found")
+            raise HTTPException(status_code=404, detail="Beslenme programı bulunamadı.")
 
         program_id = program["id"]
 
@@ -2088,7 +2088,7 @@ def assign_workout_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     try:
         # Verify program exists, belongs to this coach, and is for this student
@@ -2105,7 +2105,7 @@ def assign_workout_program(
         if not program:
             raise HTTPException(
                 status_code=404,
-                detail="Workout program not found or you don't have permission to assign it"
+                detail="Antrenman programı bulunamadı ya da atama yetkiniz yok."
             )
 
         # Transaction: deactivate all active programs for this student, then activate the specified one
@@ -2179,7 +2179,7 @@ def save_nutrition_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     cur.execute(
         "UPDATE nutrition_programs SET is_active=FALSE WHERE client_user_id=%s AND is_active=TRUE",
@@ -3249,7 +3249,7 @@ def get_latest_nutrition_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     # Get latest nutrition program
     cur.execute(
@@ -3265,7 +3265,7 @@ def get_latest_nutrition_program(
     program = cur.fetchone()
 
     if not program:
-        raise HTTPException(status_code=404, detail="Nutrition program not found")
+        raise HTTPException(status_code=404, detail="Beslenme programı bulunamadı.")
 
     program_id = program["id"]
     is_active = bool(program["is_active"])
@@ -3341,7 +3341,7 @@ def delete_workout_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     # Get day ids for this program
     cur.execute(
@@ -3394,7 +3394,7 @@ def delete_nutrition_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     # Delete meals
     cur.execute(
@@ -3661,7 +3661,7 @@ def update_my_profile(
     )
     row = cur.fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="Coach profile not found")
+        raise HTTPException(status_code=404, detail="Koç profili bulunamadı.")
 
     db.commit()
     return {"ok": True, "profile": row}
@@ -3775,7 +3775,7 @@ def update_package(package_id: int, body: CoachPackageUpdate, db=Depends(get_db)
             (package_id, current_user["id"]),
         )
         if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Package not found")
+            raise HTTPException(status_code=404, detail="Paket bulunamadı.")
 
         fields = []
         values = []
@@ -3798,7 +3798,7 @@ def update_package(package_id: int, body: CoachPackageUpdate, db=Depends(get_db)
             fields.append("image_url=%s"); values.append(body.image_url)
 
         if not fields:
-            raise HTTPException(status_code=400, detail="No fields to update")
+            raise HTTPException(status_code=400, detail="Güncellenecek bir alan yok.")
 
         values.extend([package_id, current_user["id"]])
 
@@ -4126,7 +4126,7 @@ def save_cardio_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     try:
         # Create program as DRAFT (is_active=FALSE)
@@ -4186,7 +4186,7 @@ def get_latest_cardio_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     # Get latest cardio program
     cur.execute(
@@ -4243,7 +4243,7 @@ def assign_latest_cardio_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     try:
         # Find latest cardio program for this student
@@ -4259,7 +4259,7 @@ def assign_latest_cardio_program(
         program = cur.fetchone()
 
         if not program:
-            raise HTTPException(status_code=404, detail="Cardio program not found")
+            raise HTTPException(status_code=404, detail="Kardiyo programın bulunamadı.")
 
         program_id = program["id"]
 
@@ -4313,7 +4313,7 @@ def delete_cardio_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     cur.execute(
         """

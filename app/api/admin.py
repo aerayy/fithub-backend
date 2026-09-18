@@ -23,11 +23,11 @@ def _ensure_student_access(db, coach_user_id: int, student_user_id: int):
     )
     row = cur.fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="Student not found")
+        raise HTTPException(status_code=404, detail="Öğrenci bulunamadı.")
 
     assigned = row["assigned_coach_id"] if isinstance(row, dict) else row[1]
     if assigned != coach_user_id:
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
 
 @router.get("/students")
@@ -125,7 +125,7 @@ def get_student_detail(
     )
     student = cur.fetchone()
     if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
+        raise HTTPException(status_code=404, detail="Öğrenci bulunamadı.")
 
     # 2) Onboarding (varsa)
     cur.execute(
@@ -329,7 +329,7 @@ def _create_coach_account(req: CreateCoachRequest, db) -> dict:
         if e.pgcode == "23505":  # UniqueViolation error code
             raise HTTPException(
                 status_code=409,
-                detail="Email already registered"
+                detail="Bu e-posta adresi zaten kayıtlı."
             )
         # Other integrity errors
         raise HTTPException(

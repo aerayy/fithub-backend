@@ -56,7 +56,7 @@ def mock_subscribe(
     # GÜVENLİK: prod'da ALLOW_MOCK_PURCHASE set değil → kimse bedava tier alamaz.
     if not _ALLOW_MOCK_PURCHASE:
         logger.warning("mock_subscribe blocked (prod) user=%s", user.get("id"))
-        raise HTTPException(status_code=403, detail="Mock purchase is disabled")
+        raise HTTPException(status_code=403, detail="Test satın alması kapalı.")
     try:
         result = ai_sub.create_mock_subscription(
             db, user["id"], req.tier, req.billing_period

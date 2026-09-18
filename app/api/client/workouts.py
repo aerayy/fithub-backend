@@ -252,7 +252,7 @@ def get_active_workout_for_client(
     try:
         program_data = fetch_active_program_with_payload(client_user_id, db)
         if not program_data:
-            raise HTTPException(status_code=404, detail="Active workout program not found")
+            raise HTTPException(status_code=404, detail="Aktif antrenman programın bulunamadı.")
 
         cur = db.cursor(cursor_factory=RealDictCursor)
         fallback_gif = _fetch_universal_fallback_gif(cur)

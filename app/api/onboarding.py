@@ -263,5 +263,5 @@ def get_onboarding(user_id: int, db=Depends(get_db), current_user=Depends(requir
     )
     profile = cur.fetchone()
     if not profile:
-        raise HTTPException(status_code=404, detail="Onboarding not found")
+        raise HTTPException(status_code=404, detail="Profil bilgilerin bulunamadı.")
     return {"profile": profile}

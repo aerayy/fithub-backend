@@ -206,7 +206,7 @@ def get_food_detail(
     row = cur.fetchone()
 
     if not row:
-        raise HTTPException(status_code=404, detail="Food not found")
+        raise HTTPException(status_code=404, detail="Besin bulunamadı.")
 
     return FoodItemOut(
         id=row["id"],

@@ -88,11 +88,11 @@ def get_active_workout(
 ):
     # client sadece kendi programını görebilsin
     if current_user["role"] == "client" and current_user["id"] != client_user_id:
-        raise HTTPException(status_code=403, detail="You can only access your own program")
+        raise HTTPException(status_code=403, detail="Yalnızca kendi programına erişebilirsin.")
 
     program = fetch_active_program(client_user_id, db)
     if not program:
-        raise HTTPException(status_code=404, detail="Active workout program not found")
+        raise HTTPException(status_code=404, detail="Aktif antrenman programın bulunamadı.")
 
     return {"program": program}
 

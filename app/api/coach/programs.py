@@ -100,7 +100,7 @@ def get_active_programs(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     cur.execute(
         """
@@ -195,7 +195,7 @@ def save_workout_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     cur.execute(
         "UPDATE workout_programs SET is_active=FALSE WHERE client_user_id=%s AND is_active=TRUE",
@@ -276,7 +276,7 @@ def save_nutrition_program(
         (student_user_id, coach_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=403, detail="Student not assigned to this coach")
+        raise HTTPException(status_code=403, detail="Bu öğrenci size atanmamış.")
 
     cur.execute(
         "UPDATE nutrition_programs SET is_active=FALSE WHERE client_user_id=%s AND is_active=TRUE",

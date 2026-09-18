@@ -71,7 +71,7 @@ def checkout(
         if not package:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Package not found or inactive"
+                detail="Paket bulunamadı ya da aktif değil."
             )
 
         coach_user_id = package["coach_user_id"]

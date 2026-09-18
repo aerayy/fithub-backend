@@ -86,7 +86,7 @@ def client_me(
 
     if not row:
         logger.error(f"[CLIENT_ME] User not found for user_id={user_id}")
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı.")
 
     # Extract onboarding_done - ensure it's always a boolean
     # NULL from LEFT JOIN means clients row doesn't exist -> False
@@ -151,7 +151,7 @@ def update_client_me(
         values.append(req.profile_photo_url.strip() if req.profile_photo_url else None)
 
     if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update")
+        raise HTTPException(status_code=400, detail="Güncellenecek bir alan yok.")
 
     updates.append("updated_at = NOW()")
     values.append(user_id)
@@ -164,7 +164,7 @@ def update_client_me(
     db.commit()
 
     if not row:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı.")
 
     logger.info(f"[CLIENT_ME] Profile updated for user_id={user_id}")
 

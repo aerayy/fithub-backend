@@ -49,7 +49,7 @@ def signup(req: SignUpRequest, db=Depends(get_db)):
         
         cur.execute("SELECT id FROM users WHERE email = %s", (req.email,))
         if cur.fetchone():
-            raise HTTPException(status_code=400, detail="Email already registered")
+            raise HTTPException(status_code=400, detail="Bu e-posta adresi zaten kayıtlı.")
 
         hashed = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
 
@@ -71,7 +71,7 @@ def signup(req: SignUpRequest, db=Depends(get_db)):
         if not user:
             db.rollback()
             print(f"[SIGNUP] ERROR: User insert returned no row!")
-            raise HTTPException(status_code=500, detail="Failed to create user")
+            raise HTTPException(status_code=500, detail="Hesap oluşturulamadı. Lütfen tekrar deneyin.")
         
         user_id = user["id"]
         user_role = user["role"]
@@ -140,7 +140,7 @@ def google_auth(req: GoogleAuthRequest, db=Depends(get_db)):
     Returns same format as login: access_token, token, user
     """
     if not req.id_token or not req.id_token.strip():
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     try:
         idinfo = id_token.verify_oauth2_token(
@@ -150,10 +150,10 @@ def google_auth(req: GoogleAuthRequest, db=Depends(get_db)):
         )
     except ValueError as e:
         logger.warning(f"[GOOGLE_AUTH] Token verification failed: {e}")
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
     except Exception as e:
         logger.warning(f"[GOOGLE_AUTH] Unexpected error: {e}")
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     google_sub = idinfo.get("sub")
     email = idinfo.get("email")
@@ -163,7 +163,7 @@ def google_auth(req: GoogleAuthRequest, db=Depends(get_db)):
     )
 
     if not google_sub:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     cur = db.cursor()
 
@@ -212,7 +212,7 @@ def google_auth(req: GoogleAuthRequest, db=Depends(get_db)):
         new_user = cur.fetchone()
         if not new_user:
             db.rollback()
-            raise HTTPException(status_code=500, detail="Failed to create user")
+            raise HTTPException(status_code=500, detail="Hesap oluşturulamadı. Lütfen tekrar deneyin.")
         user_id = new_user["id"]
         cur.execute(
             """
@@ -266,14 +266,14 @@ def _verify_apple_identity_token(identity_token: str) -> dict:
     """Apple identity_token JWT'sini Apple public key'leriyle dogrular.
     Issuer + audience + signature kontrolü yapar. Geçerli payload döndürür."""
     if not identity_token or not identity_token.strip():
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
     try:
         header = jose_jwt.get_unverified_header(identity_token)
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
     kid = header.get("kid")
     if not kid:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     keys = _fetch_apple_public_keys()
     matching_key = next((k for k in keys if k.get("kid") == kid), None)
@@ -283,7 +283,7 @@ def _verify_apple_identity_token(identity_token: str) -> dict:
         keys = _fetch_apple_public_keys()
         matching_key = next((k for k in keys if k.get("kid") == kid), None)
         if not matching_key:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+            raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     try:
         payload = jose_jwt.decode(
@@ -295,10 +295,10 @@ def _verify_apple_identity_token(identity_token: str) -> dict:
             options={"verify_at_hash": False},
         )
     except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token suresi dolmus")
+        raise HTTPException(status_code=401, detail="Bağlantının süresi dolmuş.")
     except JWTError as e:
         logger.warning(f"[APPLE_AUTH] JWT verify failed: {e}")
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
     return payload
 
 
@@ -317,7 +317,7 @@ def apple_auth(payload: dict = Body(...), db=Depends(get_db)):
     fallback_email = (user_info.get("email") or "").strip() or None
 
     if not identity_token:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     claims = _verify_apple_identity_token(identity_token)
     apple_sub = claims.get("sub")
@@ -326,7 +326,7 @@ def apple_auth(payload: dict = Body(...), db=Depends(get_db)):
     if isinstance(email_verified, str):
         email_verified = email_verified.lower() == "true"
     if not apple_sub:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     cur = db.cursor()
 
@@ -382,7 +382,7 @@ def apple_auth(payload: dict = Body(...), db=Depends(get_db)):
         new_user = cur.fetchone()
         if not new_user:
             db.rollback()
-            raise HTTPException(status_code=500, detail="Failed to create user")
+            raise HTTPException(status_code=500, detail="Hesap oluşturulamadı. Lütfen tekrar deneyin.")
         user_id = new_user["id"]
         cur.execute(
             """
@@ -432,10 +432,10 @@ def token(form_data: OAuth2PasswordRequestForm = Depends(), db=Depends(get_db)):
     )
     user = cur.fetchone()
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     if not bcrypt.checkpw(form_data.password.encode(), user["password_hash"].encode()):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı.")
 
     access_token = create_token(user["id"])
     return {"access_token": access_token, "token_type": "bearer"}

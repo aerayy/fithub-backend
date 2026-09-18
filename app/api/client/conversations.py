@@ -51,7 +51,7 @@ def _ensure_client_conversation(cur, conversation_id: int, client_user_id: int) 
     )
     row = cur.fetchone()
     if not row or row["client_user_id"] != client_user_id:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(status_code=404, detail="Konuşma bulunamadı.")
     return dict(row)
 
 
@@ -300,7 +300,7 @@ def create_client_conversation(
     if not coach_user_id:
         sub = _get_client_active_coach(cur, client_user_id)
         if not sub:
-            raise HTTPException(status_code=400, detail="No active subscription with a coach")
+            raise HTTPException(status_code=400, detail="Aktif bir koç aboneliğin yok.")
         coach_user_id = sub["coach_user_id"]
         subscription_id = sub.get("subscription_id")
     else:
@@ -315,7 +315,7 @@ def create_client_conversation(
         )
         sub = cur.fetchone()
         if not sub:
-            raise HTTPException(status_code=403, detail="No active subscription with this coach")
+            raise HTTPException(status_code=403, detail="Bu koçla aktif aboneliğin yok.")
         subscription_id = sub.get("id")
 
     cur.execute(
@@ -357,7 +357,7 @@ def send_client_message(
 
     # Validate: text messages need body, image messages need media_url
     if body.message_type == "text" and not body.body:
-        raise HTTPException(status_code=400, detail="body cannot be empty for text messages")
+        raise HTTPException(status_code=400, detail="Mesaj boş olamaz.")
     if body.message_type == "image" and not body.media_url:
         raise HTTPException(status_code=400, detail="media_url required for image messages")
 
@@ -435,6 +435,6 @@ def mark_client_message_read(
         (message_id, conversation_id),
     )
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Message not found or already read")
+        raise HTTPException(status_code=404, detail="Mesaj bulunamadı ya da zaten okunmuş.")
     db.commit()
     return {"ok": True}

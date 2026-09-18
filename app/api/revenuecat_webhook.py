@@ -75,12 +75,12 @@ async def revenuecat_webhook(
 
     if not hmac.compare_digest((authorization or "").strip(), expected):
         logger.warning("revenuecat webhook auth mismatch")
-        raise HTTPException(status_code=401, detail="unauthorized")
+        raise HTTPException(status_code=401, detail="Yetkisiz istek.")
 
     try:
         payload = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="invalid json body")
+        raise HTTPException(status_code=400, detail="Geçersiz istek gövdesi.")
 
     event = (payload or {}).get("event") or {}
     etype = event.get("type", "?")
@@ -96,7 +96,7 @@ async def revenuecat_webhook(
     except Exception:
         # Geçici/beklenmeyen hata → 500 → RevenueCat retry eder (event kaybolmaz).
         logger.exception("revenuecat webhook processing failed type=%s", etype)
-        raise HTTPException(status_code=500, detail="processing error")
+        raise HTTPException(status_code=500, detail="İstek işlenemedi. Lütfen tekrar deneyin.")
 
     _mark_processed(db, event_id, etype, event.get("app_user_id"))
     logger.info("revenuecat webhook handled type=%s id=%s -> %s", etype, event_id or "-", result)

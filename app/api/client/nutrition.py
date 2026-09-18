@@ -21,5 +21,5 @@ def client_get_active_nutrition(
     client_user_id = current_user["id"]
     program = fetch_active_nutrition_program(client_user_id, db)
     if not program:
-        raise HTTPException(status_code=404, detail="Active nutrition program not found")
+        raise HTTPException(status_code=404, detail="Aktif beslenme programın bulunamadı.")
     return {"program": program}

@@ -73,11 +73,11 @@ def get_active_nutrition(
 ):
     # client sadece kendi programını görebilsin
     if current_user["role"] == "client" and current_user["id"] != client_user_id:
-        raise HTTPException(status_code=403, detail="You can only access your own nutrition program")
+        raise HTTPException(status_code=403, detail="Yalnızca kendi beslenme programına erişebilirsin.")
 
     program = fetch_active_nutrition_program(client_user_id, db)
     if not program:
-        raise HTTPException(status_code=404, detail="Active nutrition program not found")
+        raise HTTPException(status_code=404, detail="Aktif beslenme programın bulunamadı.")
 
     return {"program": program}
 
