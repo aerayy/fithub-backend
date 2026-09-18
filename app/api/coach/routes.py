@@ -2620,17 +2620,25 @@ Sadece JSON döndür. MAKRO YAZMA, sadece isim ve miktar:
 
                         if unit == "g":
                             ratio = amount / 100.0
+                            item["grams"] = amount
                         else:
                             ratio = amount  # adet/porsiyon — makrolar zaten 1 birim için
-
-                        item["grams"] = amount
+                            # Gram karsiligi bilinmiyor. Onceden buraya adet sayisi
+                            # yaziliyordu ve uygulamada "4 adet = 4 g" gibi sacma
+                            # bir donusum gorunuyordu.
+                            item["grams"] = 0
                         item["calories"] = round(db_food["cal"] * ratio, 1)
                         item["protein"] = round(db_food["prot"] * ratio, 1)
                         item["carbs"] = round(db_food["carb"] * ratio, 1)
                         item["fat"] = round(db_food["fat"] * ratio, 1)
                     else:
                         miss_count += 1
-                        item["grams"] = float(item.get("amount") or item.get("grams") or 0)
+                        _birim = item.get("unit") or "g"
+                        item["grams"] = (
+                            float(item.get("amount") or item.get("grams") or 0)
+                            if _birim == "g"
+                            else 0
+                        )
                         item.setdefault("calories", 0)
                         item.setdefault("protein", 0)
                         item.setdefault("carbs", 0)
