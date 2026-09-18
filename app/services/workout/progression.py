@@ -59,6 +59,25 @@ def _shift_rep_range(reps: str, delta_lower: int = 0, delta_upper: int = 0) -> s
     return reps
 
 
+# Notun tamami mobilde ipucu olarak gosteriliyor. Onceden gerekce + hafta eki
+# birlestirilip topluca [:80] ile kesiliyordu; ek metin kelime ortasindan
+# kopuyordu ("... — Hafta 2: +2 tekra"). Once GEREKCEYI kis, sonra eki ekle.
+_NOT_SINIRI = 110
+
+
+def _hafta_notu_ekle(rationale: str, ek: str) -> str:
+    """Gerekceyi kelime sinirindan kisaltip hafta ekini butun olarak ekler."""
+    rationale = (rationale or "").strip()
+    yer = _NOT_SINIRI - len(ek)
+    if len(rationale) > yer:
+        kirpik = rationale[: max(0, yer - 1)]
+        bosluk = kirpik.rfind(" ")
+        if bosluk > 20:
+            kirpik = kirpik[:bosluk]
+        rationale = kirpik.rstrip(" ,.;:-") + "…"
+    return (rationale + ek).strip()
+
+
 def _apply_baseline(session: AssembledSession) -> AssembledSession:
     return copy.deepcopy(session)
 
@@ -70,7 +89,7 @@ def _apply_add_reps(session: AssembledSession) -> AssembledSession:
         ex.reps = _shift_rep_range(ex.reps, delta_lower=2, delta_upper=2)
         # Append week note to rationale (mobile uses it as a hint)
         if "Hafta 2" not in ex.rationale:
-            ex.rationale = (ex.rationale + " — Hafta 2: +2 tekrar")[:80]
+            ex.rationale = _hafta_notu_ekle(ex.rationale, " — Hafta 2: +2 tekrar")
     return out
 
 
@@ -82,7 +101,7 @@ def _apply_add_load(session: AssembledSession) -> AssembledSession:
         ex.reps = _shift_rep_range(ex.reps, delta_lower=-2, delta_upper=-2)
         ex.rir = max(0, ex.rir - 1)
         if "Hafta 3" not in ex.rationale:
-            ex.rationale = (ex.rationale + " — Hafta 3: ağırlığı artır")[:80]
+            ex.rationale = _hafta_notu_ekle(ex.rationale, " — Hafta 3: ağırlığı artır")
     return out
 
 
@@ -93,7 +112,7 @@ def _apply_deload(session: AssembledSession) -> AssembledSession:
         ex.sets = max(2, ex.sets - 1)
         ex.rir = min(5, ex.rir + 2)
         if "Deload" not in ex.rationale:
-            ex.rationale = (ex.rationale + " — Hafta 4: deload")[:80]
+            ex.rationale = _hafta_notu_ekle(ex.rationale, " — Hafta 4: deload")
     return out
 
 

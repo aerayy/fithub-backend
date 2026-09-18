@@ -60,6 +60,18 @@ REP_PATTERN_ENUM = [
 ]
 
 
+def _kisalt(metin: str, sinir: int = 90) -> str:
+    """Gerekceyi kelime sinirindan kisalt (onceden ham [:80] kelime ortasini kesiyordu)."""
+    metin = (metin or "").strip()
+    if len(metin) <= sinir:
+        return metin
+    kirpik = metin[: sinir - 1]
+    bosluk = kirpik.rfind(" ")
+    if bosluk > 20:
+        kirpik = kirpik[:bosluk]
+    return kirpik.rstrip(" ,.;:-") + "…"
+
+
 def _build_schema(candidate_ids: list[int], min_count: int, max_count: int) -> dict:
     """Strict JSON schema — id enum + bounded counts + clamped sets/reps/RIR.
 
@@ -262,7 +274,7 @@ async def assemble_session(
             sets=int(e["sets"]),
             reps=str(e["reps"]),
             rir=int(e["rir"]),
-            rationale=str(e.get("rationale", ""))[:80],
+            rationale=_kisalt(str(e.get("rationale", ""))),
         )
         for e in exercises_raw
     ]
